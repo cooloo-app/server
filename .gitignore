@@ -1,3 +1,6 @@
 /cooloo
 *.o
 /tests/noise_kat
+/tests/net_client
+/coolood
+*.dSYM/

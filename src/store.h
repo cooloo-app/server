@@ -32,4 +32,17 @@ int cooloo_store_tail(const char *room, long n);
  * tail data is left for the next call. Returns 0 on success, -1 on error. */
 int cooloo_store_read_update(const char *room, off_t *offset);
 
+/* Emit hook (v1 daemon): when set, read/tail/read_update deliver each
+ * parsed line through fn(ctx, ...) instead of printf to stdout.
+ * ts/nick/text are NOT NUL-terminated; use the lengths.
+ * fn returns 0 to continue; non-zero stops the read loop WITHOUT
+ * advancing past the current line (daemon uses this to suspend output
+ * when the connection buffer is full, resuming from the same offset).
+ * Single-threaded use only; the v0 gate never sets this (NULL = stdout). */
+typedef int (*cooloo_emit_fn)(void *ctx, long long end_offset,
+                              const char *ts, size_t ts_len,
+                              const char *nick, size_t nick_len,
+                              const char *text, size_t text_len);
+void cooloo_store_set_emit(cooloo_emit_fn fn, void *ctx);
+
 #endif /* COOLOO_STORE_H */

@@ -24,6 +24,35 @@ int cooloo_cmd_whoami(int argc, char **argv)
     return 0;
 }
 
+/* fingerprint (D26): print the native daemon's server fingerprint so SSH
+ * users can bootstrap TOFU over this already-authenticated channel.
+ * The file is written by coolood at startup. */
+int cooloo_cmd_fingerprint(int argc, char **argv)
+{
+    char path[1024];
+    char buf[128];
+    FILE *fp;
+    (void)argc;
+    (void)argv;
+
+    if (snprintf(path, sizeof(path), "%s/server_fingerprint",
+                 cooloo_home()) >= (int)sizeof(path))
+        cooloo_die(COOLOO_EXIT_IO, "path too long");
+    fp = fopen(path, "r");
+    if (!fp)
+        cooloo_die(COOLOO_EXIT_IO,
+                   "fingerprint unavailable (coolood not deployed yet)");
+    if (!fgets(buf, sizeof(buf), fp)) {
+        fclose(fp);
+        cooloo_die(COOLOO_EXIT_IO, "fingerprint file unreadable");
+    }
+    fclose(fp);
+    fputs(buf, stdout);
+    if (!strchr(buf, '\n'))
+        putchar('\n');
+    return 0;
+}
+
 #define COOLOO_ROOMS_MAX 4096
 
 static int cmp_room(const void *a, const void *b)

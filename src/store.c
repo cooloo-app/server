@@ -57,8 +57,17 @@ off_t cooloo_store_append(const char *room, const char *nick,
     return end;
 }
 
-/* Emit one stored line to stdout in read format.
- * Returns offset just past the line, or -1 if line malformed. */
+/* Emit one stored line. Default output is stdout (v0); the daemon
+ * installs a hook via cooloo_store_set_emit (single-threaded). */
+static cooloo_emit_fn g_emit = NULL;
+static void *g_emit_ctx = NULL;
+
+void cooloo_store_set_emit(cooloo_emit_fn fn, void *ctx)
+{
+    g_emit = fn;
+    g_emit_ctx = ctx;
+}
+
 static off_t emit_line(const char *line, size_t len, off_t line_start)
 {
     const char *p = line, *end = line + len;
@@ -72,12 +81,20 @@ static off_t emit_line(const char *line, size_t len, off_t line_start)
     if (!sp2)
         return -1;
 
-    /* <end_offset> <ts> <nick> <text> */
-    printf("%lld %.*s %.*s %.*s\n",
-           (long long)next,
-           (int)(sp1 - p), p,
-           (int)(sp2 - sp1 - 1), sp1 + 1,
-           (int)(end - sp2 - 1), sp2 + 1);
+    if (g_emit) {
+        if (g_emit(g_emit_ctx, (long long)next,
+                   p, (size_t)(sp1 - p),
+                   sp1 + 1, (size_t)(sp2 - sp1 - 1),
+                   sp2 + 1, (size_t)(end - sp2 - 1)))
+            return -1;      /* hook asked to stop: offset not advanced */
+    } else {
+        /* <end_offset> <ts> <nick> <text> */
+        printf("%lld %.*s %.*s %.*s\n",
+               (long long)next,
+               (int)(sp1 - p), p,
+               (int)(sp2 - sp1 - 1), sp1 + 1,
+               (int)(end - sp2 - 1), sp2 + 1);
+    }
     return next;
 }
 

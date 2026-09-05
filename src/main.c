@@ -29,7 +29,8 @@ static void usage(void)
             "  cooloo read <room> -<N>         read last N lines\n"
             "  cooloo follow <room> [offset]   stream new messages\n"
             "  cooloo rooms                    list rooms\n"
-            "  cooloo whoami                   print nick (gate mode only)\n");
+            "  cooloo whoami                   print nick (gate mode only)\n"
+            "  cooloo fingerprint              print native daemon fingerprint\n");
 }
 
 int cooloo_dispatch(int argc, char **argv)
@@ -48,6 +49,8 @@ int cooloo_dispatch(int argc, char **argv)
         return cooloo_cmd_rooms(argc, argv);
     if (strcmp(argv[1], "whoami") == 0)
         return cooloo_cmd_whoami(argc, argv);
+    if (strcmp(argv[1], "fingerprint") == 0)
+        return cooloo_cmd_fingerprint(argc, argv);
 
     fprintf(stderr, "ERR unknown command: %s\n", argv[1]);
     return COOLOO_EXIT_ARG;
