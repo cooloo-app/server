@@ -135,6 +135,18 @@ static int nick_valid(const char *nick)
     return 1;
 }
 
+/* copy a validated room name; callers already ran cooloo_room_valid, so
+ * this is just a bounded copy (avoids gcc -Wformat-truncation noise that
+ * snprintf("%s") triggers even on proven-safe paths) */
+static void room_copy(char dst[COOLOO_MAX_ROOM + 1], const char *src)
+{
+    size_t n = strlen(src);
+    if (n > COOLOO_MAX_ROOM)
+        n = COOLOO_MAX_ROOM;
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
 /* 0 = registered, 1 = nick-taken, -1 = io error. fp known-new (daemon
  * already looked it up), but re-check under the lock anyway (race). */
 static int users_register(const char *fp_hex, const char *nick)
@@ -434,7 +446,7 @@ static void cmd_send(struct pconn *c, const char *room, const char *len_s)
     c->sendst.active = 1;
     c->sendst.got = 0;
     c->sendst.len = (size_t)len;
-    snprintf(c->sendst.room, sizeof(c->sendst.room), "%s", room);
+    room_copy(c->sendst.room, room);
     if (len > SEND_RAW_MAX) {
         /* already answered; just drain the payload off the stream */
         c->sendst.discard = 1;
@@ -508,7 +520,7 @@ static void cmd_read(struct pconn *c, const char *room, const char *arg)
     c->xfer.is_read = 1;
     c->xfer.follow_idx = -1;
     c->xfer.offset = offset;
-    snprintf(c->xfer.room, sizeof(c->xfer.room), "%s", room);
+    room_copy(c->xfer.room, room);
     xfer_pump(c);
 }
 
@@ -525,7 +537,7 @@ static void cmd_follow(struct pconn *c, const char *room, const char *arg)
         return;
     }
     idx = c->nfollows++;
-    snprintf(c->follows[idx].room, sizeof(c->follows[idx].room), "%s", room);
+    room_copy(c->follows[idx].room, room);
     c->follows[idx].live = 0;
 
     if (arg) {
@@ -548,7 +560,7 @@ static void cmd_follow(struct pconn *c, const char *room, const char *arg)
         c->xfer.is_read = 0;
         c->xfer.follow_idx = idx;
         c->xfer.offset = offset;
-        snprintf(c->xfer.room, sizeof(c->xfer.room), "%s", room);
+        room_copy(c->xfer.room, room);
         xfer_pump(c);
     } else {
         /* from tail: live immediately at current size */
