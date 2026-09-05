@@ -1,2 +1,3 @@
 /cooloo
 *.o
+/tests/noise_kat
