@@ -60,7 +60,7 @@ int cooloo_cmd_read(int argc, char **argv)
         if (cooloo_store_tail(room, n) != 0)
             cooloo_die(COOLOO_EXIT_IO, "io error reading room log");
     } else {
-        off_t off;
+        off_t off = 0;
         if (parse_offset(argv[3], &off) != 0)
             cooloo_dief(COOLOO_EXIT_ARG, "bad offset: %s", argv[3]);
         if (cooloo_store_read(room, off) != 0)
