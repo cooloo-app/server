@@ -17,6 +17,10 @@
  */
 #include "noise_xx.h"
 
+#ifdef _WIN32
+#define _CRT_RAND_S                 /* rand_s() prototype in <stdlib.h> */
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -252,6 +256,19 @@ static int ensure_ephemeral(noise_hs *hs)
         return 0;                    /* injected, pub already derived */
 #ifdef __APPLE__
     arc4random_buf(hs->e, NOISE_KEY_LEN);
+#elif defined(_WIN32)
+    {
+        /* no /dev/urandom on native Windows: rand_s is the CRT's
+         * OS-backed RNG (same pattern as cli.c read_random). Without this
+         * branch msg1 generation fails and every Windows handshake dies
+         * before a single byte is sent. */
+        unsigned int i, v = 0;
+        for (i = 0; i < NOISE_KEY_LEN; i++) {
+            if (i % 4 == 0 && rand_s(&v) != 0)
+                return -1;
+            hs->e[i] = (uint8_t)(v >> ((i % 4) * 8));
+        }
+    }
 #else
     {
         /* /dev/urandom is fine here: no fork-after-read in either binary,
