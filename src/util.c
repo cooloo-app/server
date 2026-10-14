@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 void cooloo_die(int code, const char *msg)
 {
@@ -24,7 +26,18 @@ void cooloo_dief(int code, const char *fmt, const char *arg)
 const char *cooloo_home(void)
 {
     const char *h = getenv("COOLOO_HOME");
-    return (h && h[0]) ? h : COOLOO_DEFAULT_HOME;
+    static char path[1024];
+    const char *home;
+    int n;
+    if (h && h[0]) return h;
+    home = getenv("HOME");
+    if (!home || !home[0]) cooloo_die(1, "HOME required or set COOLOO_HOME");
+    n = snprintf(path, sizeof path, "%s/.cooloo", home);
+    if (n < 0 || (size_t)n >= sizeof path) cooloo_die(1, "HOME too long");
+    if (mkdir(path, 0700) && errno != EEXIST) cooloo_die(1, "cannot create ~/.cooloo");
+    n = snprintf(path, sizeof path, "%s/.cooloo/server", home);
+    if (n < 0 || (size_t)n >= sizeof path) cooloo_die(1, "HOME too long");
+    return path;
 }
 
 int cooloo_rooms_dir(char *buf, size_t buflen)

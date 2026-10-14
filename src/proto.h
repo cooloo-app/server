@@ -17,6 +17,7 @@
 
 #include "cooloo.h"
 #include "noise_xx.h"
+#include "model.h"
 
 #define CONN_OUT_CAP     (256 * 1024)  /* encrypted bytes pending write */
 #define CONN_OUT_LOWAT   (64 * 1024)   /* resume suspended xfer below this */
@@ -57,6 +58,7 @@ struct pconn {
         off_t  offset;
         int    is_read;                /* 1: send END at EOF; 0: catch-up */
         int    follow_idx;             /* catch-up target (-1 for READ) */
+        off_t  skip_until;             /* tail-read starting boundary */
     } xfer;
 
     /* SEND payload reception: header parsed, collecting len raw bytes */

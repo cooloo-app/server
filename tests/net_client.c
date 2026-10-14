@@ -20,6 +20,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/time.h>
 
 static int g_fd = -1;
 static noise_session g_sess;
@@ -132,7 +133,7 @@ static void print_until(const char *terminator)
     for (;;) {
         next_line(line, sizeof line);
         printf("%s\n", line);
-        if (!strcmp(line, terminator))
+        if (!strcmp(line, terminator) || !strncmp(line, "ERR ", 4))
             return;
     }
 }
@@ -177,6 +178,13 @@ int main(int argc, char **argv)
     }
     cmd = argv[3];
 
+    if (!strcmp(cmd, "PUBLIC")) {
+        uint8_t pk[32];
+        noise_public_key(pk, sk);
+        for (i = 0; i < 32; i++) printf("%02x", pk[i]);
+        putchar('\n');
+        return 0;
+    }
     g_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (g_fd < 0)
         die("socket");
@@ -191,7 +199,7 @@ int main(int argc, char **argv)
     setsockopt(g_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 
     /* Noise_XX initiator, empty payloads, no TOFU (test driver) */
-    noise_hs_init_initiator(&hs, sk, (const uint8_t *)"cooloo-v1", 9);
+    noise_hs_init_initiator(&hs, sk, (const uint8_t *)"cooloo-v2", 9);
     n = noise_hs_write_msg1(&hs, msg, sizeof msg, NULL, 0);
     if (!n)
         die("msg1");

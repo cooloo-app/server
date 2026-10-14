@@ -190,7 +190,7 @@ static void conn_accept(int listen_fd)
         g_conns[i].hs_start = time(NULL);
         g_conns[i].hs_expect = NOISE_MSG1_LEN;
         noise_hs_init_responder(&g_conns[i].hs, g_server_sk,
-                                (const uint8_t *)"cooloo-v1", 9);
+                                (const uint8_t *)"cooloo-v2", 9);
     }
 }
 
@@ -240,7 +240,15 @@ static void hs_step(struct conn *c)
         memset(&c->hs, 0, sizeof c->hs);
         c->p.established = 1;
         /* identity = client static key fingerprint (D20) */
-        noise_fingerprint_hex(c->p.fp, client_pk);
+        {
+            static const char hex[] = "0123456789abcdef";
+            size_t k;
+            for (k = 0; k < 32; k++) {
+                c->p.fp[k * 2] = hex[client_pk[k] >> 4];
+                c->p.fp[k * 2 + 1] = hex[client_pk[k] & 15];
+            }
+            c->p.fp[64] = 0;
+        }
         proto_lookup_nick(c->p.fp, c->p.nick);
         proto_on_established(&c->p);
     }
@@ -375,11 +383,11 @@ int main(int argc, char **argv)
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);      /* portable: macOS lacks MSG_NOSIGNAL */
 
+    proto_users_init();
     if (server_key_init() != 0) {
         fprintf(stderr, "coolood: server key init failed\n");
         return 1;
     }
-    proto_users_init();
 
     listen_fd = listen_socket(bind_addr, port);
     if (listen_fd < 0) {

@@ -8,8 +8,8 @@
 
 /* Limits (see handoff D11/D13) */
 #define COOLOO_MAX_MSG   4096   /* max escaped message bytes, single write() */
-#define COOLOO_MAX_ROOM  32     /* room name max length (regex: ^[a-z0-9][a-z0-9_-]{0,31}$) */
-#define COOLOO_MAX_NICK  16     /* nick max length ([a-z0-9_-]{1,16}) */
+#define COOLOO_MAX_ROOM  68     /* public ID plus optional :NNN alias */
+#define COOLOO_MAX_NICK  64     /* nickname UTF-8 bytes */
 #define COOLOO_TAIL_MAX  1000   /* read -N upper bound */
 
 /* Default data dir, overridable via env COOLOO_HOME (D14) */

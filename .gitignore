@@ -2,5 +2,6 @@
 *.o
 /tests/noise_kat
 /tests/net_client
+/tests/model_test
 /coolood
 *.dSYM/
