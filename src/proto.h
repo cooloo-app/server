@@ -40,7 +40,8 @@ struct pconn {
     size_t   in_len;
 
     char     nick[COOLOO_MAX_NICK + 1]; /* "" = unregistered (D25 gate) */
-    char     fp[65];                    /* client static key fingerprint */
+    char     fp[65];                    /* authenticated public key */
+    char     effective[65];             /* AS identity, immutable during streams */
 
     /* live follows; offset semantics = store byte offsets */
     struct {
@@ -57,6 +58,7 @@ struct pconn {
         char   room[COOLOO_MAX_ROOM + 1];
         off_t  offset;
         int    is_read;                /* 1: send END at EOF; 0: catch-up */
+        int    is_sent;                /* filtered sender view, END includes scan cursor */
         int    follow_idx;             /* catch-up target (-1 for READ) */
         off_t  skip_until;             /* tail-read starting boundary */
     } xfer;

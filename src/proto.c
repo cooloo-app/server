@@ -70,10 +70,13 @@ static void pump(struct pconn *c)
     int rc;
     if (!c->xfer.active) return;
     before = c->xfer.offset;
-    rc = model_read(&db, c->fp, c->xfer.room, &c->xfer.offset, emit, c);
+    model_authenticate(&db,c->fp);
+    rc = c->xfer.is_sent ? model_sent(&db,c->effective,c->xfer.room,&c->xfer.offset,emit,c)
+                        : model_read(&db,c->effective,c->xfer.room,&c->xfer.offset,emit,c);
     if (rc) { error(c); c->xfer.active = 0; return; }
     if (c->xfer.offset == before && c->out_len < CONN_OUT_CAP - MODEL_JSON_MAX - 8320) {
-        if (c->xfer.is_read) outf(c, "END\n");
+        if (c->xfer.is_sent) outf(c,"END %lld\n",(long long)c->xfer.offset);
+        else if (c->xfer.is_read) outf(c, "END\n");
         else {
             int i = c->xfer.follow_idx;
             c->follows[i].offset = c->xfer.offset;
@@ -92,7 +95,8 @@ void proto_tick(struct pconn *c)
     if (c->xfer.active) return;
     for (i = 0; i < c->nfollows; i++) {
         if (!c->follows[i].live) continue;
-        if (model_read(&db, c->fp, c->follows[i].room, &c->follows[i].offset, emit, c)) {
+        model_authenticate(&db,c->fp);
+        if (model_read(&db, c->effective, c->follows[i].room, &c->follows[i].offset, emit, c)) {
             error(c); c->follows[i].live = 0;
         }
     }
@@ -126,6 +130,7 @@ static void exec_line(struct pconn *c, char *line)
     model_meta v;
     off_t off;
     if (!cmd) return;
+    model_authenticate(&db,c->fp);
     if (!strcmp(cmd, "PING")) { outf(c, "PONG\n"); return; }
     if (!strcmp(cmd, "WHOAMI")) {
         proto_lookup_nick(c->fp, c->nick);
@@ -137,33 +142,48 @@ static void exec_line(struct pconn *c, char *line)
         return;
     }
     if (!c->nick[0]) { outf(c, "ERR not-registered HELLO first\n"); return; }
+    if (!strcmp(cmd,"AS")) {
+        if(c->xfer.active || c->nfollows) { outf(c,"ERR busy identity locked by streams\n"); return; }
+        if(!model_id_valid(rest) || model_authorize(&db,rest,MODEL_READ|MODEL_WRITE)) { errno=EACCES; error(c); return; }
+        strcpy(c->effective,rest); outf(c,"OK\n"); return;
+    }
     if (!strcmp(cmd, "ROOMS")) {
-        if (model_list(&db, c->fp, room_line, c)) error(c);
+        if (model_list(&db, c->effective, room_line, c)) error(c);
         else outf(c, "END\n");
         return;
     }
     if (!strcmp(cmd, "CREATE")) {
         char id[65];
-        if (model_room(&db, c->fp, rest, id)) error(c);
+        if (model_room(&db, c->effective, rest, id)) error(c);
         else outf(c, "ROOM %s %s\n", id, rest);
         return;
     }
     a = word(&rest);
     if (!a) { outf(c, "ERR bad-request missing argument\n"); return; }
+    if (!strcmp(cmd,"DELEGATE")) {
+        unsigned bits;
+        if(!strcmp(rest,"read")) bits=MODEL_READ;
+        else if(!strcmp(rest,"write")) bits=MODEL_WRITE;
+        else if(!strcmp(rest,"read,write")) bits=MODEL_READ|MODEL_WRITE;
+        else if(!strcmp(rest,"none")) bits=0;
+        else { errno=EINVAL; error(c); return; }
+        if(model_delegate(&db,c->effective,a,bits)) error(c); else outf(c,"OK\n");
+        return;
+    }
     if (!strcmp(cmd, "ROOMMODE")) {
-        if (model_room_mode(&db,c->fp,a,rest)) error(c);
+        if (model_room_mode(&db,c->effective,a,rest)) error(c);
         else outf(c,"OK\n");
         return;
     }
     if (!strcmp(cmd, "AVATAR")) {
         b = word(&rest);
         if (number(a, &off) || off < 1 || off > 899 || !b) { outf(c, "ERR bad-request avatar arguments\n"); return; }
-        if (model_avatar(&db, c->fp, (unsigned)off, b, rest)) error(c);
+        if (model_avatar(&db, c->effective, (unsigned)off, b, rest)) error(c);
         else outf(c, "USER %s %s\n", b, rest);
         return;
     }
     if (!strcmp(cmd, "RENAME")) {
-        if (model_rename(&db, c->fp, a, rest)) error(c);
+        if (model_rename(&db, c->effective, a, rest)) error(c);
         else outf(c, "OK\n");
         return;
     }
@@ -174,14 +194,14 @@ static void exec_line(struct pconn *c, char *line)
     }
     if (!strcmp(cmd, "METAFILE")) {
         char json[1024]; int n;
-        if (model_get_visible(&db,c->fp,a,&v)) { error(c); return; }
+        if (model_get_visible(&db,c->effective,a,&v)) { error(c); return; }
         n = model_meta_json(&v, json, sizeof json);
         if (n < 0) error(c);
         else { outf(c, "META %s", json); }
         return;
     }
     if (!strcmp(cmd, "META")) {
-        if (model_get_visible(&db,c->fp,a,&v)) { error(c); return; }
+        if (model_get_visible(&db,c->effective,a,&v)) { error(c); return; }
         outf(c, "INFO %s %s %s %03u %s\n", v.id, v.type,
              v.owner[0] ? v.owner : "-", v.slot, v.nickname); return;
     }
@@ -194,20 +214,21 @@ static void exec_line(struct pconn *c, char *line)
         c->sendst.active = 1; c->sendst.len = (size_t)off; c->sendst.got = 0;
         strcpy(c->sendst.room, v.id); return;
     }
-    if (strcmp(cmd, "READ") && strcmp(cmd, "FOLLOW")) {
+    if (strcmp(cmd, "READ") && strcmp(cmd, "FOLLOW") && strcmp(cmd,"SENT")) {
         outf(c, "ERR unknown-command %s\n", cmd); return;
     }
-    if (model_can_read(&db, c->fp, v.id)) { error(c); return; }
+    if (strcmp(cmd,"SENT") && model_can_read(&db, c->effective, v.id)) { error(c); return; }
     if (c->xfer.active) { outf(c, "ERR busy transfer active\n"); return; }
     /* Full history and explicit offsets are canonical. Legacy -N is removed. */
     if (!*rest && !strcmp(cmd, "FOLLOW")) {
         off_t cursor = 0; off = 0;
-        if (model_read(&db, c->fp, v.id, &cursor, boundary, &off)) { error(c); return; }
+        if (model_read(&db, c->effective, v.id, &cursor, boundary, &off)) { error(c); return; }
     } else if (number(rest, &off)) { outf(c, "ERR bad-request nonnegative offset required\n"); return; }
     if (!strcmp(cmd, "FOLLOW") && c->nfollows >= CONN_MAX_FOLLOWS) {
         outf(c, "ERR limit too many follows\n"); return;
     }
-    c->xfer.active = 1; c->xfer.is_read = !strcmp(cmd, "READ");
+    c->xfer.active = 1; c->xfer.is_read = strcmp(cmd,"FOLLOW")!=0;
+    c->xfer.is_sent = !strcmp(cmd,"SENT");
     c->xfer.offset = off; c->xfer.skip_until = 0; strcpy(c->xfer.room, v.id);
     if (!c->xfer.is_read) {
         int i = c->nfollows++;
@@ -217,7 +238,7 @@ static void exec_line(struct pconn *c, char *line)
     pump(c);
 }
 void proto_on_established(struct pconn *c)
-{ outf(c, "COOLOO 2 %s\n", c->nick[0] ? c->nick : "-"); }
+{ strcpy(c->effective,c->fp); outf(c, "COOLOO 2 %s\n", c->nick[0] ? c->nick : "-"); }
 void proto_on_plain(struct pconn *c, const uint8_t *pt, size_t len)
 {
     if (len > CONN_IN_CAP - c->in_len) { c->close_pending = 1; return; }
@@ -231,7 +252,8 @@ void proto_on_plain(struct pconn *c, const uint8_t *pt, size_t len)
             c->sendst.got += n; memmove(c->in, c->in + n, c->in_len - n); c->in_len -= n;
             if (c->sendst.got < c->sendst.len) return;
             c->sendst.active = 0;
-            if (model_send(&db, c->fp, c->sendst.room, (char *)c->sendst.buf, c->sendst.len, &end)) error(c);
+            model_authenticate(&db,c->fp);
+            if (model_send(&db, c->effective, c->sendst.room, (char *)c->sendst.buf, c->sendst.len, &end)) error(c);
             else outf(c, "OK %lld\n", (long long)end);
         } else {
             char *nl = memchr(c->in, '\n', c->in_len);

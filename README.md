@@ -1,4 +1,4 @@
-# Protocol 2 — v0.2.1
+# Protocol 2 — v0.2.2
 
 This release implements public-key IDs, file-based inboxes and simple private
 rooms. Both the Native daemon and SSH gate must be upgraded together. There is
@@ -11,6 +11,12 @@ rules, storage and limitations. **Any registered user can make any room public**
 in this temporary policy; do not use it as a confidentiality guarantee.
 `public -> private` adds this room's historical senders, retaining owner and
 existing members (maximum 200 distinct members).
+
+## Message delegation
+
+See [DELEGATION.md](DELEGATION.md) for owner-controlled independent read/write
+grants, explicit AS identity selection, filtered SENT and recovery limitations.
+Existing avatars have no delegated permissions until their owner explicitly grants them.
 
 ## Build and verify
 

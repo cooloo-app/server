@@ -230,6 +230,8 @@ static int actor_user(model *m, const char *actor)
     if (load_meta(m, actor, &a)) return -1;
     return !strcmp(a.type, "user") ? 0 : fail(EACCES);
 }
+#include "delegation.inc"
+
 static int create(model *m, const model_meta *v)
 {
     char p[1200];
@@ -247,7 +249,7 @@ int model_register(model *m, const char *actor, const char *nickname)
     memset(&v, 0, sizeof v);
     strcpy(v.id, actor); strcpy(v.type, "user"); strcpy(v.nickname, nickname);
     if (flock(m->lock_fd, LOCK_EX)) return -1;
-    rc = create(m, &v); e = errno;
+    rc = authority(m,actor,0) ? -1 : create(m, &v); e = errno;
     flock(m->lock_fd, LOCK_UN); errno = e;
     return rc;
 }
@@ -260,7 +262,7 @@ int model_avatar(model *m, const char *actor, unsigned slot,
     if (!model_id_valid(actor) || !model_id_valid(child) || !nickname_valid(nickname) ||
         !slot || slot > 899 || !strcmp(actor, child)) return fail(EINVAL);
     if (flock(m->lock_fd, LOCK_EX)) return -1;
-    if (load_meta(m, actor, &a)) goto out;
+    if (authority(m,actor,0) || load_meta(m, actor, &a)) goto out;
     if (strcmp(a.type, "user") || a.owner[0]) { errno = EACCES; goto out; }
     snprintf(alias, sizeof alias, "%s:%03u", actor, slot);
     if (!get(m, alias, &existing)) { errno = EEXIST; goto out; }
@@ -282,7 +284,7 @@ int model_room(model *m, const char *actor, const char *nickname, char id[65])
     int fd, rc = -1, e, i;
     if (!model_id_valid(actor) || !nickname_valid(nickname)) return fail(EINVAL);
     if (flock(m->lock_fd, LOCK_EX)) return -1;
-    if (actor_user(m, actor)) goto out;
+    if (authority(m,actor,0) || actor_user(m, actor)) goto out;
     fd = open("/dev/urandom", O_RDONLY);
     if (fd < 0) goto out;
     if (read(fd, random, sizeof random) != sizeof random) { close(fd); errno = EIO; goto out; }
@@ -302,7 +304,7 @@ int model_rename(model *m, const char *actor, const char *address, const char *n
     int rc = -1, e;
     if (!nickname_valid(nickname)) return fail(EINVAL);
     if (flock(m->lock_fd, LOCK_EX)) return -1;
-    if (actor_user(m, actor) || get(m, address, &v)) goto out;
+    if (authority(m,actor,0) || actor_user(m, actor) || get(m, address, &v)) goto out;
     if (strcmp(actor, v.id) && strcmp(actor, v.owner)) { errno = EACCES; goto out; }
     strcpy(v.nickname, nickname); rc = save_meta(m, &v);
 out:
@@ -310,7 +312,7 @@ out:
 }
 static int readable(model *m, const char *actor, const char *address, model_meta *v)
 {
-    if (actor_user(m, actor) || get(m, address, v)) return -1;
+    if (authority(m,actor,MODEL_READ) || actor_user(m, actor) || get(m, address, v)) return -1;
     if (!strcmp(v->type,"room")) return room_visible(m,actor,v);
     return !strcmp(actor, v->id) ? 0 : fail(EACCES);
 }
@@ -333,7 +335,7 @@ int model_send(model *m, const char *actor, const char *address,
     if (!content || !len || len > MODEL_CONTENT_MAX || !utf8(content, len)) return fail(EINVAL);
     /* Serialize control validation and the journal append across both transports. */
     if (flock(m->lock_fd, LOCK_EX)) return -1;
-    if (actor_user(m, actor) || get(m, address, &v)) goto out;
+    if (authority(m,actor,MODEL_WRITE) || actor_user(m, actor) || get(m, address, &v)) goto out;
     if (!strcmp(v.type,"room")) {
         room_access a; char target[65]; int kind, ix;
         kind = room_command(v.id,content,len,target);
@@ -380,8 +382,8 @@ out:
     if (fd >= 0) close(fd);
     flock(m->lock_fd, LOCK_UN); errno = e; return rc;
 }
-int model_read(model *m, const char *actor, const char *address,
-               off_t *offset, model_emit emit, void *ctx)
+static int read_messages(model *m, const char *actor, const char *address,
+               off_t *offset, model_emit emit, void *ctx, int sent)
 {
     model_meta v;
     char p[1200], line[MODEL_JSON_MAX], tail;
@@ -390,7 +392,11 @@ int model_read(model *m, const char *actor, const char *address,
     struct stat st;
     if (!offset || *offset < 0 || !emit) return fail(EINVAL);
     if (flock(m->lock_fd, LOCK_SH)) return -1;
-    if (readable(m, actor, address, &v) || path(m, p, sizeof p, v.id, "messages.jsonl")) goto out;
+    if(sent) {
+        if(authority(m,actor,MODEL_READ) || actor_user(m,actor) || get(m,address,&v)) goto out;
+        if(strcmp(v.type,"user")) { errno=EINVAL; goto out; }
+    } else if(readable(m,actor,address,&v)) goto out;
+    if(path(m,p,sizeof p,v.id,"messages.jsonl")) goto out;
     fd = open(p, O_RDONLY | O_NOFOLLOW);
     if (fd < 0) { if (errno == ENOENT && !*offset) rc = 0; goto out; }
     if (flock(fd, LOCK_SH) || fstat(fd, &st)) goto out;
@@ -405,6 +411,11 @@ int model_read(model *m, const char *actor, const char *address,
         size_t n = strlen(line);
         int accepted;
         if (!n || line[n-1] != '\n') { rc = fail(EIO); break; }
+        if(sent) {
+            char from[65],to[65]; long long ts; int pos=0;
+            if(sscanf(line,"{\"ts\":%lld,\"from\":\"%64[0-9a-f]\",\"to\":\"%64[0-9a-f]\",\"content\":\"%n",&ts,from,to,&pos)!=3 || !pos || !model_id_valid(from) || strcmp(to,v.id)) { rc=fail(EIO); break; }
+            if(strcmp(from,actor)) { *offset+=(off_t)n; continue; }
+        }
         accepted = emit(ctx, *offset + (off_t)n, line, n);
         if (accepted) { if (accepted < 0) rc = -1; break; }
         *offset += (off_t)n;
@@ -416,6 +427,10 @@ out:
     if (fd >= 0) close(fd);
     flock(m->lock_fd, LOCK_UN); errno = e; return rc;
 }
+int model_read(model *m,const char *actor,const char *address,off_t *offset,model_emit emit,void *ctx)
+{ return read_messages(m,actor,address,offset,emit,ctx,0); }
+int model_sent(model *m,const char *actor,const char *peer,off_t *offset,model_emit emit,void *ctx)
+{ return read_messages(m,actor,peer,offset,emit,ctx,1); }
 int model_list(model *m, const char *actor, model_visit visit, void *ctx)
 {
     char p[1200];
@@ -425,7 +440,7 @@ int model_list(model *m, const char *actor, model_visit visit, void *ctx)
     int rc = -1, e;
     if (!visit) return fail(EINVAL);
     if (flock(m->lock_fd, LOCK_SH)) return -1;
-    if (actor_user(m, actor)) goto out;
+    if (authority(m,actor,MODEL_READ) || actor_user(m, actor)) goto out;
     snprintf(p, sizeof p, "%s/rooms", m->root);
     dp = opendir(p);
     if (!dp) goto out;

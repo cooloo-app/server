@@ -84,7 +84,30 @@ int main(int argc, char **argv)
     snprintf(p, sizeof p, "%s/rooms/%s/messages.jsonl", argv[1], room);
     f = fopen(p, "a"); assert(f); fputs("{incomplete", f); assert(!fclose(f));
     assert(model_send(&m, a, room, "no", 2, &end) < 0 && errno == EIO);
+    /* Authorization checked in the model under the same operation lock. */
+    model_authenticate(&m,a);
+    assert(!model_delegate(&m,a,c,MODEL_READ));
+    model_authenticate(&m,c);
+    assert(!model_authorize(&m,a,MODEL_READ));
+    assert(model_authorize(&m,a,MODEL_WRITE)<0);
+    assert(model_delegate(&m,a,c,3)<0 && errno==EACCES);
+    assert(model_send(&m,a,b,"denied",6,&end)<0 && errno==EACCES);
+    model_authenticate(&m,a);
+    assert(!model_delegate(&m,a,c,MODEL_WRITE));
+    model_authenticate(&m,c);
+    assert(!model_send(&m,a,b,"delegated",9,&end));
+    off=0;
+    assert(model_read(&m,a,a,&off,emit,NULL)<0 && errno==EACCES);
+    model_authenticate(&m,a);
+    assert(!model_delegate(&m,a,c,MODEL_READ|MODEL_WRITE));
+    model_authenticate(&m,c);
+    off=0; count=0;
+    assert(!model_sent(&m,a,b,&off,emit,NULL) && count==1 && off==end);
+    model_authenticate(&m,a);
+    assert(!model_delegate(&m,a,c,0));
+    model_authenticate(&m,c);
+    assert(model_sent(&m,a,b,&off,emit,NULL)<0 && errno==EACCES);
     model_close(&m);
-    puts("model: identity, alias, ACL, UTF-8, JSONL, backpressure, concurrent append and restart passed");
+    puts("model: identity, ACL, delegation bits/revocation, filtered sent, JSONL, concurrent append and restart passed");
     return 0;
 }

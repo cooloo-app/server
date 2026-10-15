@@ -157,7 +157,7 @@ int model_room_mode(model *m, const char *actor, const char *address, const char
     if(!mode || (strcmp(mode,"public") && strcmp(mode,"private"))) return fail(EINVAL);
     want=!strcmp(mode,"private");
     if(flock(m->lock_fd,LOCK_EX)) return -1;
-    if(actor_user(m,actor) || get(m,address,&v)) goto out;
+    if(authority(m,actor,0) || actor_user(m,actor) || get(m,address,&v)) goto out;
     if(strcmp(v.type,"room")) { errno=EINVAL; goto out; }
     if(access_enable(m,&v) || access_load(m,&v,&a)) goto out;
     if(a.private_room==want) { rc=0; goto out; }
@@ -186,6 +186,6 @@ int model_get_visible(model *m, const char *actor, const char *address, model_me
 {
     int rc=-1,e;
     if(flock(m->lock_fd,LOCK_SH)) return -1;
-    if(!actor_user(m,actor) && !get(m,address,out)) rc=room_visible(m,actor,out);
+    if(!authority(m,actor,MODEL_READ) && !actor_user(m,actor) && !get(m,address,out)) rc=room_visible(m,actor,out);
     e=errno; flock(m->lock_fd,LOCK_UN); errno=e; return rc;
 }

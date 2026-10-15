@@ -55,6 +55,16 @@ int main(int argc, char **argv)
     }
     if (!n) return 2;
     if (model_open(&db, cooloo_home())) { perror("cooloo"); return 1; }
+    model_authenticate(&db,argv[2]);
+    /* Remote --as selects an effective identity, never changes authenticated ID. */
+    if(n>=3 && !strcmp(args[0],"--as")) {
+        actor=args[1];
+        if(!model_id_valid(actor) || model_authorize(&db,actor,MODEL_READ|MODEL_WRITE)) {
+            fprintf(stderr,"ERR forbidden\n"); model_close(&db); return 1;
+        }
+        for(i=0;i<n-2;i++) args[i]=args[i+2];
+        n-=2;
+    }
     cmd = args[0];
     if (!strcmp(cmd, "register") && n == 2) rc = model_register(&db, actor, args[1]);
     else if (!strcmp(cmd, "whoami") && n == 1) {
@@ -64,6 +74,20 @@ int main(int argc, char **argv)
         rc = model_list(&db, actor, listed, NULL); if (!rc) puts("END");
     } else if (!strcmp(cmd, "create") && n == 2) {
         rc = model_room(&db, actor, args[1], id); if (!rc) printf("ROOM %s %s\n", id, args[1]);
+    } else if (!strcmp(cmd,"delegate") && n==3) {
+        unsigned bits=99;
+        if(!strcmp(args[2],"read")) bits=MODEL_READ;
+        else if(!strcmp(args[2],"write")) bits=MODEL_WRITE;
+        else if(!strcmp(args[2],"read,write")) bits=3;
+        else if(!strcmp(args[2],"none")) bits=0;
+        rc=model_delegate(&db,actor,args[1],bits);
+        if(!rc) puts("OK");
+    } else if (!strcmp(cmd,"sent") && n==3) {
+        if(number(args[2],&end)) errno=EINVAL;
+        else {
+            rc=model_sent(&db,actor,args[1],&end,emit,NULL);
+            if(!rc) printf("END %lld\n",(long long)end);
+        }
     } else if (!strcmp(cmd,"room-mode") && n==3) {
         rc=model_room_mode(&db,actor,args[1],args[2]);
         if (!rc) puts("OK");

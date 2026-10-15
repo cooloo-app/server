@@ -24,8 +24,16 @@ typedef struct {
 typedef struct {
     char root[1024];
     int lock_fd;               /* stable process-shared registry lock */
+    char authenticated[65];    /* request context, never supplied by remote payload */
 } model;
 
+#define MODEL_READ 1
+#define MODEL_WRITE 2
+/* Bind transport-authenticated identity before each request/pump. NULL clears
+ * context for trusted local model callers. Effective identity is the actor arg. */
+void model_authenticate(model *m, const char *authenticated);
+int model_authorize(model *m, const char *effective, unsigned permission);
+int model_delegate(model *m, const char *owner, const char *child, unsigned permissions);
 int model_id_valid(const char *id);
 int model_open(model *m, const char *root);
 void model_close(model *m);
@@ -53,6 +61,8 @@ int model_send(model *m, const char *actor, const char *address,
  * Shared lock gives a finite snapshot for this call. */
 typedef int (*model_emit)(void *ctx, off_t end, const char *jsonl, size_t len);
 int model_read(model *m, const char *actor, const char *address,
+               off_t *offset, model_emit emit, void *ctx);
+int model_sent(model *m, const char *actor, const char *peer,
                off_t *offset, model_emit emit, void *ctx);
 /* Registered actor sees public rooms and their own inbox, never other inboxes.
  * Callback nonzero stops enumeration and is returned to caller. */
