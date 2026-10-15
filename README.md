@@ -1,8 +1,16 @@
-# Protocol 2 — development checkout
+# Protocol 2 — v0.2.1
 
-This checkout implements public-key IDs and file-based inboxes. **Not deployed
-or released.** Existing release binaries still speak protocol 1. There is no
-legacy-data migration or protocol compatibility shim.
+This release implements public-key IDs, file-based inboxes and simple private
+rooms. Both the Native daemon and SSH gate must be upgraded together. There is
+no protocol-1 compatibility shim or legacy-history migration.
+
+## Simple private rooms
+
+See [PRIVATE_ROOMS.md](PRIVATE_ROOMS.md) for commands, member blocks, join-message
+rules, storage and limitations. **Any registered user can make any room public**
+in this temporary policy; do not use it as a confidentiality guarantee.
+`public -> private` adds this room's historical senders, retaining owner and
+existing members (maximum 200 distinct members).
 
 ## Build and verify
 
@@ -45,9 +53,10 @@ WHOAMI
 CREATE <nickname>
 AVATAR <slot> <child-public-id> <nickname>
 RENAME <id-or-alias> <nickname>
+ROOMMODE <room-id> public|private
 META <id-or-alias>             # INFO id type owner-or-- slot nickname
 METAFILE <id-or-alias>         # META <canonical JSON metadata>
-ROOMS                        # public rooms + own inbox, then END
+ROOMS                        # accessible rooms + own inbox, then END
 SEND <id-or-alias> <length>\n<raw payload>
 READ <id-or-alias> <offset>   # from boundary; no legacy -N
 FOLLOW <id-or-alias> [offset] # omitted offset = current tail
@@ -56,7 +65,8 @@ PING
 
 Messages: `MSG <end-offset> <JSON-byte-length>\n<JSON>\n`. READ ends with END.
 SEND returns `OK <end-offset>`. Errors start with ERR. Use explicit offsets
-for durable catch-up. Public metadata does not contain private keys.
+for durable catch-up. Private room metadata requires membership; user display
+metadata remains public.
 
 ## SSH gate
 
@@ -67,7 +77,8 @@ to choose the forced-command ID.
 
 Gate commands: `register <nickname>`, `whoami`, `rooms`, `create <nickname>`,
 `avatar <slot> <child-id> <nickname>`, `rename <id> <nickname>`, `meta <id>`,
-`send <id> [text...]`, `read <id> <offset>`, `follow <id> <offset>`.
+`send <id> [text...]`, `read <id> <offset>`, `follow <id> <offset>`,
+`join <room-id>`, `room-mode <room-id> public|private`.
 Use stdin for exact multiline message bytes. Gate tokenizes command arguments
 by whitespace; native registration supports spaces in nicknames.
 Local administration uses `cooloo --as <public-id> <command>`; this entry point
@@ -75,6 +86,7 @@ is not accepted through SSH_ORIGINAL_COMMAND.
 
 ## Validation boundaries
 
-Linux model/native/gate tests pass. Actual sshd deployment, macOS/Windows
-binaries, full GUI window operation and production cutover remain unverified.
+See the planner release/deployment handoff for platform and production validation.
+`make test` covers model, Native and gate behavior in isolated environments;
+these tests alone do not verify actual sshd or full GUI operation.
 Registry lookup is intentionally file-based and linear; no scale benchmark.

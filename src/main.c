@@ -42,7 +42,7 @@ int main(int argc, char **argv)
     actor = argv[2];
     if (!strcmp(argv[1], "__gate")) {
         const char *oc = getenv("SSH_ORIGINAL_COMMAND");
-        if (!oc || !*oc) { puts("cooloo protocol 2: whoami, rooms, create, avatar, rename, meta, send, read, follow"); return 0; }
+        if (!oc || !*oc) { puts("cooloo protocol 2: whoami, rooms, create, avatar, rename, meta, join, room-mode, send, read, follow"); return 0; }
         if (strlen(oc) >= sizeof original) return 2;
         strcpy(original, oc);
         for (token = strtok_r(original, " \t\r\n", &save); token; token = strtok_r(NULL, " \t\r\n", &save)) {
@@ -64,12 +64,22 @@ int main(int argc, char **argv)
         rc = model_list(&db, actor, listed, NULL); if (!rc) puts("END");
     } else if (!strcmp(cmd, "create") && n == 2) {
         rc = model_room(&db, actor, args[1], id); if (!rc) printf("ROOM %s %s\n", id, args[1]);
+    } else if (!strcmp(cmd,"room-mode") && n==3) {
+        rc=model_room_mode(&db,actor,args[1],args[2]);
+        if (!rc) puts("OK");
+    } else if (!strcmp(cmd,"join") && n==2) {
+        if (!model_id_valid(args[1])) errno=EINVAL;
+        else {
+            len=(size_t)snprintf(buf,sizeof buf,"@%s join-request",args[1]);
+            rc=model_send(&db,actor,args[1],buf,len,&end);
+            if (!rc) printf("OK %lld\n",(long long)end);
+        }
     } else if (!strcmp(cmd, "avatar") && n == 4) {
         if (!number(args[1], &end) && end > 0 && end < 900) rc = model_avatar(&db, actor, (unsigned)end, args[2], args[3]);
         else errno = EINVAL;
     } else if (!strcmp(cmd, "rename") && n == 3) rc = model_rename(&db, actor, args[1], args[2]);
     else if (!strcmp(cmd, "meta") && n == 2) {
-        rc = model_get(&db, args[1], &meta);
+        rc = model_get_visible(&db, actor, args[1], &meta);
         if (!rc) printf("INFO %s %s %s %03u %s\n", meta.id, meta.type, meta.owner[0] ? meta.owner : "-", meta.slot, meta.nickname);
     } else if (!strcmp(cmd, "send") && n >= 2) {
         if (n == 2) len = fread(buf, 1, sizeof buf, stdin);

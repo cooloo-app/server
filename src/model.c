@@ -120,7 +120,13 @@ int model_meta_json(const model_meta *v, char *json, size_t cap)
     n = snprintf(json, cap,
         "{\"id\":\"%s\",\"type\":\"%s\",\"nickname\":%s,\"owner\":\"%s\",\"slot\":%u}\n",
         v->id, v->type, nick, v->owner, v->slot);
-    return n < 0 || (size_t)n >= cap ? fail(EOVERFLOW) : n;
+    if (n < 0 || (size_t)n >= cap) return fail(EOVERFLOW);
+    if (v->access) {
+        int k = snprintf(json + n - 2, cap - (size_t)n + 2, ",\"access\":%u}\n", v->access);
+        if (k < 0 || (size_t)k >= cap - (size_t)n + 2) return fail(EOVERFLOW);
+        n = n - 2 + k;
+    }
+    return n;
 }
 static int save_meta(model *m, const model_meta *v)
 {
@@ -172,7 +178,10 @@ static int load_meta(model *m, const char *id, model_meta *v)
     s = strchr(q, '"');
     if (!s || (s - q != 0 && s - q != 64)) return fail(EINVAL);
     memcpy(v->owner, q, (size_t)(s - q));
-    if (sscanf(s, "\",\"slot\":%u}\n%n", &v->slot, &used) != 1 || !used || s[used]) return fail(EINVAL);
+    if (sscanf(s, "\",\"slot\":%u}\n%n", &v->slot, &used) != 1 || !used || s[used]) {
+        used = 0;
+        if (sscanf(s, "\",\"slot\":%u,\"access\":%u}\n%n", &v->slot, &v->access, &used) != 2 || !used || s[used] || v->access != 1 || strcmp(v->type,"room")) return fail(EINVAL);
+    }
     if (!nickname_valid(v->nickname) ||
         (strcmp(v->type, "user") && strcmp(v->type, "room")) ||
         (v->owner[0] && !model_id_valid(v->owner)) || v->slot > 899) return fail(EINVAL);
@@ -263,6 +272,8 @@ int model_avatar(model *m, const char *actor, unsigned slot,
 out:
     e = errno; flock(m->lock_fd, LOCK_UN); errno = e; return rc;
 }
+#include "room_access.inc"
+
 int model_room(model *m, const char *actor, const char *nickname, char id[65])
 {
     static const char hex[] = "0123456789abcdef";
@@ -280,6 +291,7 @@ int model_room(model *m, const char *actor, const char *nickname, char id[65])
     for (i = 0; i < 32; i++) { v.id[i*2] = hex[random[i] >> 4]; v.id[i*2+1] = hex[random[i] & 15]; }
     strcpy(v.type, "room"); strcpy(v.nickname, nickname); strcpy(v.owner, actor);
     rc = create(m, &v);
+    if (!rc) rc = access_enable(m, &v);
     if (!rc) strcpy(id, v.id);
 out:
     e = errno; flock(m->lock_fd, LOCK_UN); errno = e; return rc;
@@ -299,7 +311,8 @@ out:
 static int readable(model *m, const char *actor, const char *address, model_meta *v)
 {
     if (actor_user(m, actor) || get(m, address, v)) return -1;
-    return !strcmp(v->type, "room") || !strcmp(actor, v->id) ? 0 : fail(EACCES);
+    if (!strcmp(v->type,"room")) return room_visible(m,actor,v);
+    return !strcmp(actor, v->id) ? 0 : fail(EACCES);
 }
 int model_can_read(model *m, const char *actor, const char *address)
 {
@@ -316,9 +329,35 @@ int model_send(model *m, const char *actor, const char *address,
     char p[1200], text[MODEL_CONTENT_MAX * 6 + 3], json[MODEL_JSON_MAX], tail;
     int fd = -1, rc = -1, n, e;
     off_t start;
+    long long now = (long long)time(NULL);
     if (!content || !len || len > MODEL_CONTENT_MAX || !utf8(content, len)) return fail(EINVAL);
-    if (flock(m->lock_fd, LOCK_SH)) return -1;
+    /* Serialize control validation and the journal append across both transports. */
+    if (flock(m->lock_fd, LOCK_EX)) return -1;
     if (actor_user(m, actor) || get(m, address, &v)) goto out;
+    if (!strcmp(v.type,"room")) {
+        room_access a; char target[65]; int kind, ix;
+        kind = room_command(v.id,content,len,target);
+        if (kind < 0) goto out;
+        if (kind && access_enable(m,&v)) goto out;
+        if (access_load(m,&v,&a)) goto out;
+        if (kind == 1) {
+            if (member_index(&a,actor)>=0) { errno=EALREADY; goto out; }
+            ix=request_index(&a,actor);
+            if (ix>=0 && now-a.pending[ix].ts<=86400) { errno=EAGAIN; goto out; }
+            if (a.count==ROOM_MEMBERS || (ix<0 && a.requests==ROOM_REQUESTS)) { errno=ENOSPC; goto out; }
+        } else if (kind == 2) {
+            if (member_index(&a,actor)<0) { errno=EACCES; goto out; }
+            ix=request_index(&a,target);
+            if (member_index(&a,target)>=0) {
+                struct stat st;
+                if (path(m,p,sizeof p,v.id,"messages.jsonl")) goto out;
+                if (stat(p,&st)) goto out;
+                *end=st.st_size; rc=0; goto out;
+            }
+            if (ix<0 || !a.pending[ix].pending) { errno=ENOENT; goto out; }
+            if (a.count==ROOM_MEMBERS) { errno=ENOSPC; goto out; }
+        } else if (a.private_room && member_index(&a,actor)<0) { errno=EACCES; goto out; }
+    }
     if (path(m, p, sizeof p, v.id, "messages.jsonl")) goto out;
     fd = open(p, O_RDWR | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);
     if (fd < 0 || flock(fd, LOCK_EX)) goto out;
@@ -328,7 +367,7 @@ int model_send(model *m, const char *actor, const char *address,
     if (start && (pread(fd, &tail, 1, start - 1) != 1 || tail != '\n')) { errno = EIO; goto out; }
     quote(text, content, len);
     n = snprintf(json, sizeof json, "{\"ts\":%lld,\"from\":\"%s\",\"to\":\"%s\",\"content\":%s}\n",
-                 (long long)time(NULL), actor, v.id, text);
+                 now, actor, v.id, text);
     if (n <= 0 || (size_t)n >= sizeof json) { errno = EOVERFLOW; goto out; }
     if (allwrite(fd, json, (size_t)n) || fsync(fd)) {
         e = errno;
@@ -395,6 +434,10 @@ int model_list(model *m, const char *actor, model_visit visit, void *ctx)
         if (!model_id_valid(de->d_name)) continue;
         if (load_meta(m, de->d_name, &v)) { rc = -1; break; }
         if (!strcmp(v.type, "room") || !strcmp(actor, v.id)) {
+            if (!strcmp(v.type,"room") && room_visible(m,actor,&v)) {
+                if (errno==EACCES) continue;
+                rc=-1; break;
+            }
             rc = visit(ctx, &v);
             if (rc) break;
         }

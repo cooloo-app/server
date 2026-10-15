@@ -18,6 +18,7 @@ typedef struct {
     char nickname[MODEL_NICK_MAX + 1];
     char owner[65];             /* empty for root user */
     unsigned slot;             /* child: 1..899, otherwise 0 */
+    unsigned access;           /* room access schema; 0 = legacy public */
 } model_meta;
 
 typedef struct {
@@ -30,6 +31,11 @@ int model_open(model *m, const char *root);
 void model_close(model *m);
 int model_get(model *m, const char *address, model_meta *out);
 int model_meta_json(const model_meta *v, char *json, size_t cap);
+/* Display lookup hides private rooms from nonmembers; user metadata stays public. */
+int model_get_visible(model *m, const char *actor, const char *address, model_meta *out);
+/* Temporary policy: any registered user can switch either direction.
+ * public -> private adds this room's historical senders; retains owner/members, max 200. */
+int model_room_mode(model *m, const char *actor, const char *address, const char *mode);
 /* Existing public keys cannot be reassigned or silently renamed. */
 int model_register(model *m, const char *authenticated_id, const char *nickname);
 int model_avatar(model *m, const char *actor, unsigned slot,
@@ -38,7 +44,7 @@ int model_room(model *m, const char *actor, const char *nickname, char id[65]);
 int model_rename(model *m, const char *actor, const char *address,
                  const char *nickname);
 /* Only the recipient reads a user inbox (not its owner, nor its senders).
- * Registered identities may read/write public rooms. */
+ * Registered identities may read/write public rooms; private rooms require membership. */
 int model_can_read(model *m, const char *actor, const char *address);
 int model_send(model *m, const char *actor, const char *address,
                const char *content, size_t len, off_t *end);

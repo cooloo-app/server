@@ -30,7 +30,9 @@ static void error(struct pconn *c)
 {
     int e = errno;
     outf(c, "ERR %s %s\n", e == EACCES ? "forbidden" : e == ENOENT ? "not-found" :
-         e == EEXIST ? "exists" : e == EINVAL ? "bad-request" : "internal", strerror(e));
+         e == EEXIST ? "exists" : e == EINVAL ? "bad-request" :
+         e == EAGAIN ? "rate-limited" : e == EALREADY ? "already-member" :
+         e == ENOSPC ? "limit" : "internal", strerror(e));
 }
 void proto_users_init(void)
 {
@@ -148,6 +150,11 @@ static void exec_line(struct pconn *c, char *line)
     }
     a = word(&rest);
     if (!a) { outf(c, "ERR bad-request missing argument\n"); return; }
+    if (!strcmp(cmd, "ROOMMODE")) {
+        if (model_room_mode(&db,c->fp,a,rest)) error(c);
+        else outf(c,"OK\n");
+        return;
+    }
     if (!strcmp(cmd, "AVATAR")) {
         b = word(&rest);
         if (number(a, &off) || off < 1 || off > 899 || !b) { outf(c, "ERR bad-request avatar arguments\n"); return; }
@@ -166,13 +173,15 @@ static void exec_line(struct pconn *c, char *line)
         return;
     }
     if (!strcmp(cmd, "METAFILE")) {
-        char json[1024]; int n = model_meta_json(&v, json, sizeof json);
+        char json[1024]; int n;
+        if (model_get_visible(&db,c->fp,a,&v)) { error(c); return; }
+        n = model_meta_json(&v, json, sizeof json);
         if (n < 0) error(c);
         else { outf(c, "META %s", json); }
         return;
     }
     if (!strcmp(cmd, "META")) {
-        /* Display metadata is public. No secrets are returned. */
+        if (model_get_visible(&db,c->fp,a,&v)) { error(c); return; }
         outf(c, "INFO %s %s %s %03u %s\n", v.id, v.type,
              v.owner[0] ? v.owner : "-", v.slot, v.nickname); return;
     }

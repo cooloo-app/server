@@ -17,10 +17,10 @@ DAEMON_SRC := src/daemon.c src/proto.c src/model.c src/util.c \
 
 all: cooloo coolood
 
-cooloo: $(GATE_SRC) $(wildcard src/*.h)
+cooloo: $(GATE_SRC) $(wildcard src/*.h) src/room_access.inc
 	$(CC) $(CFLAGS) -o $@ $(GATE_SRC)
 
-coolood: $(DAEMON_SRC) $(wildcard src/*.h)
+coolood: $(DAEMON_SRC) $(wildcard src/*.h) src/room_access.inc
 	$(CC) $(CFLAGS) -o $@ $(DAEMON_SRC)
 
 tests/noise_kat: tests/noise_kat.c $(NOISE_SRC) src/noise_xx.h
@@ -29,7 +29,7 @@ tests/noise_kat: tests/noise_kat.c $(NOISE_SRC) src/noise_xx.h
 tests/net_client: tests/net_client.c $(NOISE_SRC) src/noise_xx.h
 	$(CC) $(CFLAGS) -Isrc -o $@ tests/net_client.c $(NOISE_SRC)
 
-tests/model_test: tests/model_test.c src/model.c src/model.h
+tests/model_test: tests/model_test.c src/model.c src/model.h src/room_access.inc
 	$(CC) $(CFLAGS) -Isrc -o $@ tests/model_test.c src/model.c
 
 modeltest: tests/model_test
@@ -48,6 +48,7 @@ nettest: coolood cooloo tests/net_client
 	python3 tests/protocol2_test.py
 
 test: cooloo coolood vectors nettest modeltest
+	python3 tests/private_room_test.py
 
 install: cooloo coolood
 	install -m 0755 cooloo $(PREFIX)/bin/cooloo
