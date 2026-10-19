@@ -1,144 +1,154 @@
-# Message delegation and filtered sent history — v0.2.2
+# Ordinary avatars and pure mirror credentials
 
-Requires matching upgraded daemon, SSH gate and client.
-No `full` permission and no new identity extension block. Existing private-room
-member blocks are unchanged.
+A is the parent; B is its child. Relationships are single-level and created only
+for previously unused public keys. Independent registered accounts cannot be
+claimed. Slots 001–899 resolve to B, never to A; 000 resolves to A.
 
-## Owner grants, child selects
-
-A must first create B as an existing avatar using the existing `avatar` operation.
-This version does not bind already-registered independent users as avatars.
-Slot numbers (001–899) carry no implicit permission.
+## Ordinary avatar
 
 Using A's actual credential:
 
 ```sh
+cooloo avatar 001 <B-id> <nickname>
 cooloo delegate <B-id> read
 cooloo delegate <B-id> write
 cooloo delegate <B-id> read,write
 cooloo delegate <B-id> none
 ```
 
-Each command **replaces** the permission set; `none` revokes both. It is not an
-additive grant. B cannot grant/revoke on A's behalf, even with both permissions.
-No transitive delegation. Read and write are independent:
+B is an independent message identity. A starts with read/write access **to B**.
+`delegate` replaces A's access to B; it does NOT grant B access to A. Read and
+write are independent. A may read B's inbox directly or select `--as B` to use
+B's message permissions (including B's private-room memberships and SENT).
+`--as B send ...` records B as sender. B cannot turn off A's access.
 
-- read: A's inbox READ/FOLLOW, A's accessible room READ/FOLLOW, ROOMS,
-  visible META/METAFILE, and filtered SENT records from A.
-- write: SEND as A, subject to A's ordinary destination permissions. Addressed
-  room controls sent via SEND retain their current effects (e.g. join approval).
-- neither permission grants AVATAR, DELEGATE, RENAME, CREATE, or ROOMMODE as A.
-  HELLO/WHOAMI remain tied to the actual credential.
+Read covers inbox/accessible room READ/FOLLOW, ROOMS, visible metadata and
+filtered SENT. Write covers SEND, including existing addressed room controls.
+Neither permits administration as another identity: AVATAR, MIRROR, DETACH,
+DELEGATE, CREATE, RENAME and ROOMMODE require the actual identity. A may still
+rename its children using A's ordinary owner operation.
 
-B defaults to B. Use an explicit prefix to act as A:
+## Pure mirror
 
 ```sh
-cooloo send <C-id> 'from B'
-cooloo --as <A-id> send <C-id> 'from A'
-cooloo --as <A-id> read <A-id> 0
-cooloo --as <A-id> follow <A-id>
-cooloo --as <A-id> sent <C-id> 0
-cooloo --as <A-id> history
+cooloo mirror 002 <B-id> <nickname>
 ```
 
-Place global flags before the command. The transmitted `from` is the effective
-identity. CLI cache identity is the effective identity, not the login credential.
-`whoami` is an authentication operation, not a delegated profile query; use it
-without `--as` (META queries the effective profile explicitly).
+B is only a credential for A's message identity. B authentication defaults to A;
+message permissions equal A's, not A's administration privileges. There is no
+second active inbox or sender:
 
-## Trust boundary
+- All SEND to B (including A:002) fail with forbidden, without forwarding.
+- All SEND with effective sender B fail, even with explicit `--as B` or parent
+  credentials. Server checks both endpoints under the append lock.
+- B defaults to A for READ/FOLLOW/ROOMS/SENT/SEND on Native and SSH.
+- B cannot grant, create avatars/mirrors, detach, rename, create rooms or change
+  room modes as A. B cannot use its own identity to bypass this restriction.
+- A and mirrors see A's readable children, including B's metadata/inbox directory.
+  B's directory can be read/synchronized but receives no new messages. Existing
+  history is retained. `mirror:1` in METAFILE is display data, not authority.
+- Mirror permissions are fixed; `delegate B ...` is rejected. Use DETACH to revoke
+  the mirror relationship. Ordinary avatars and mirrors cannot have children.
 
-Authoritative grants live under `$COOLOO_HOME/authz/<owner-id>/<child-id>`:
-
-```text
-DELEGATE-1 <permission-bits>
+```sh
+cooloo identity                 # actual credential and effective identity
+cooloo whoami                  # actual credential, never the default parent
+cooloo detach <B-id>            # A's actual credential; B becomes independent
 ```
 
-Bit 1 = read, bit 2 = write. Files are 0600 in 0700 directories, outside mutable
-user properties. Missing or invalid records deny access. No permission is inferred
-from child owner/slot metadata. Changing child properties alone cannot create a
-grant; the owner must authenticate and explicitly grant. Grant creation checks
-that the recipient currently is the owner's avatar; revocation does not depend
-on child properties remaining unchanged.
+DETACH preserves B's ID, key, nickname, history and room memberships. Existing
+connections still using A lose access on the next operation/pump. B's subsequent
+connections default to B and may send/receive independently. No transitive grants.
 
-Future Lua property APIs MUST NOT expose `authz`, identity registry security
-operations, arbitrary filesystem paths, or auth-context setters. This version
-adds no Lua filesystem writer. Server-admin filesystem access remains trusted.
+## Protocol and clients
 
-Both transports bind the actual authenticated identity in model request context.
-Authorization is rechecked under the same registry lock as each read/send/list
-operation, including READ/FOLLOW pumps and completion of a SEND payload. Grants
-are atomically replaced under that lock; revocation removes the grant. Already
-transmitted or queued data and client caches cannot be recalled. Files are fsynced
-before replacement, but existing directory-entry power-loss limitations remain.
-All backup/restore operations must include authz; never restore stale grants alone.
-
-## Native protocol
+Native commands:
 
 ```text
-AS <effective-user-id>              -> OK
+IDENTITY                         -> IDENTITY <authenticated-id> <effective-id>
+AS <effective-id>                 -> OK
+AVATAR <slot> <child-id> <nickname> -> USER ...
+MIRROR <slot> <child-id> <nickname> -> USER ...
 DELEGATE <child-id> read|write|read,write|none -> OK
+DETACH <child-id>                 -> OK
 SENT <peer-user-id> <scan-byte-offset>
 ```
 
-AS selects self or an explicitly delegated identity with at least one permission.
-Each operation then enforces the particular permission. Selection cannot change
-while a READ/SENT transfer or FOLLOW subscription exists; use another connection.
-Authentication is never replaced. AS errors must not be ignored by clients.
+IDENTITY works before registration; WHOAMI/HELLO are bound to actual credentials.
+A mirror Native connection must query IDENTITY or explicitly AS before business
+commands; unaware old clients fail rather than silently cache A's messages as B.
+AS checks at least one message permission, then each operation checks its bit.
+AS cannot change during READ/SENT/FOLLOW. AS failure never falls back to self.
+SSH accepts matching lowercase commands and optional `--as` before the command.
+Its forced-command identity remains the actual authentication context.
 
-SENT only accepts user inboxes, never rooms. It returns ordinary MSG frames but
-only for `from == effective identity`, followed by `END <scan-byte-offset>`.
-The scan cursor advances over unmatched records as well, including when nothing
-matches. Invalid/non-boundary/beyond-end offsets fail. Peer inbox contents are
-filtered server-side; clients cannot request a different sender. No server index,
-message copy, contact record, or whole-server scan is introduced. Source byte
-positions can reveal peer inbox size/activity, but not unrelated message content;
-this is a deliberate consequence of reusing physical scan offsets in this version.
+Updated CLI queries IDENTITY before every connection's business commands, uses
+the effective ID for cache/history, and exposes `identity` (also Machine JSON).
+GUI discovers the mirror default before loading views, verifies every stream's
+identity and maintains separate room directories under the effective identity's
+cache partition. A and B folders synchronize via bounded background subscriptions;
+`.meta` is fetched for background subscriptions as well as explicitly opened rooms.
+Known mirrors cannot be GUI send targets. A changed default on reconnect fails
+closed until Workspace: Identity resets the views/drafts; empty selects the
+server default. Lua request() uses the server default; request_as() is explicit.
 
-Filtered records are not a contiguous peer inbox: NEVER put them in the normal
-room JSONL cache. (peer ID, source end offset) identifies a returned record in the
-append-only log. Log replacement/truncation is outside the supported cursor model.
+## Trusted storage and reset
 
-SSH gate accepts `--as <effective-id>` before its command, plus
-`delegate <child-id> <permissions>` and `sent <peer-id> <offset>`. Remote --as only
-selects an authorized effective identity; it never selects the authenticated one.
-The outer local administrative `cooloo --as <authenticated-id> ...` remains a
-trusted local filesystem administration tool, not remotely callable dispatch.
+`$COOLOO_HOME/relations/<child-id>` contains:
 
-## Recovery scope
+```text
+RELATION-1 <owner-id> <slot> <mirror:0-or-1> <parent-read/write-bits>
+```
 
-Native CLI `sent` prints JSONL and prints the next scan offset to stderr. `history`
-reads its own inbox, discovers peers from received messages, queries only those
-peer inboxes, deduplicates by (destination, source offset), and prints a timestamp-
-sorted JSONL snapshot. Equal timestamps use destination and offset for deterministic
-ordering, not a cross-inbox causal-order guarantee. CLI limits are 10,000 merged
-messages and 256 peers; exceeding a limit fails explicitly. It currently uses all
-received records within these bounds rather than a time-window filter.
+Bits 1/2 represent read/write. Files are 0600, directories 0700; invalid records
+fail closed. Missing records mean independent accounts. Relation creation checks
+both identities, uniqueness and no nesting. Metadata owner/slot/mirror fields are
+overlaid from this trusted record; editing user metadata cannot create or alter a
+relationship. Future user property APIs MUST NOT expose relations, filesystem paths,
+registry operations or authentication context. Server-admin access is trusted.
 
-GUI has one effective identity per window: enter `/as <A-id>` or `/self` in the
-message input. All new connections select the window identity before use; the
-status bar shows shortened effective/login IDs. Switching clears in-memory views;
-READ caches are partitioned by effective identity. There is no separate identity
-picker or multiple identity panes in this version. Read-only delegation works for
-browsing; write-only is primarily usable through CLI because GUI lists need read.
+Every operation and FOLLOW pump rechecks under the registry lock, including SEND
+payload completion. Records are atomically replaced and fsynced; the existing
+lack of complete directory-entry power-loss transactions remains. Revocation cannot
+recall queued/transmitted messages or local caches. Backups must include relations.
 
-After inbox catch-up, GUI discovers up to 256 peers from its bounded recent message
-buffer and fetches SENT sequentially. Filtered outgoing messages are merged in the
-inbox view without advancing its READ/FOLLOW checkpoint. This is an online,
-in-memory view, not a durable sparse-cache implementation. Reconnect refreshes
-queries; existing-peer outgoing changes on another device are not continuously
-followed in this version. Ordinary incoming messages continue through FOLLOW.
+**No legacy delegation compatibility.** Before deployment: block gate, stop daemon,
+wait for all writers to exit, take a complete restricted backup, then run:
 
-**Known and accepted gap:** a peer that has never sent to this identity is not
-automatically discovered, even if this identity has sent to it. Direct `sent` works
-if the peer ID is known. Do not describe history as complete multi-device recovery.
-No shared read receipts, contact/room-subscription sync, or E2EE is included.
+```sh
+python3 tools/reset_legacy_relations.py /var/cooloo          # dry run
+python3 tools/reset_legacy_relations.py /var/cooloo --apply
+```
+
+This clears old user owner/slot fields and removes obsolete authz. Accounts, keys,
+nicknames, messages and room ACLs remain unchanged. The script refuses existing
+new relations; it is offline, idempotent and not run automatically on startup.
+Old authz is never consulted. Native/gate must be upgraded together. Do not restore
+old binaries against new mirror data: they would reopen B's sending/inbox paths.
+
+## Filtered sent history (unchanged limits)
+
+SENT accepts user inboxes only, returns MSG for `from == effective identity`, and
+ends with `END <scan-byte-offset>`. It scans past unmatched records, including
+empty results. Invalid/non-boundary/beyond-end offsets fail. Physical cursors reveal
+peer inbox size/activity, not unrelated message content. No server index, duplicate
+body, whole-server scan or contact record is introduced.
+
+Filtered records are NOT a contiguous inbox: never append them to the ordinary
+JSONL cache. Deduplicate by (destination, source-end-offset). Log replacement or
+truncation is outside the cursor model. CLI history merges inbox and SENT for peers
+discovered from incoming messages, with 10,000-message/256-peer bounds and explicit
+failure on overflow. Equal timestamps use destination/offset, not causal order.
+GUI merges sparse outgoing records in memory, without advancing READ/FOLLOW's
+checkpoint; reconnect refreshes them, not continuous cross-device sent tracking.
+Peers that never replied are not discovered: known IDs may be queried with SENT.
+This is not complete multi-device recovery, read-receipt or contact sync, or E2EE.
 
 ## Validation
 
-`make -C server test` and `make -C client test` cover independent permissions,
-default-vs-effective sender, escalation rejection, metadata tampering without
-grants, invalid grant rejection, server-side filtering, empty scans/bad offsets,
-merged recovery/accepted discovery gap, cross-transport revocation, live delegated
-FOLLOW cancellation, effective-identity cache paths, and mocked GUI state flow.
-Real GUI, Windows/macOS builds, real sshd and production rollout are separate.
+`make -C server test`, `make -C client test`, Lua provider mocks and
+`python3 client/tests/mirror_workbench.py` cover model/Native/gate parity, parent
+read/write separation, mirror default/sender/inbox restrictions, administration
+rejection, detach and FOLLOW revocation, metadata tampering, offline legacy reset,
+filtered history and real runner/SDL-dummy dual-directory cache synchronization.
+Desktop Windows/macOS GUI acceptance and production checks are separate.

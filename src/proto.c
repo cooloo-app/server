@@ -132,6 +132,10 @@ static void exec_line(struct pconn *c, char *line)
     if (!cmd) return;
     model_authenticate(&db,c->fp);
     if (!strcmp(cmd, "PING")) { outf(c, "PONG\n"); return; }
+    if (!strcmp(cmd, "IDENTITY")) {
+        c->identity_confirmed=1;
+        outf(c,"IDENTITY %s %s\n",c->fp,c->effective); return;
+    }
     if (!strcmp(cmd, "WHOAMI")) {
         proto_lookup_nick(c->fp, c->nick);
         outf(c, "NICK %s\n", c->nick[0] ? c->nick : "-"); return;
@@ -145,7 +149,12 @@ static void exec_line(struct pconn *c, char *line)
     if (!strcmp(cmd,"AS")) {
         if(c->xfer.active || c->nfollows) { outf(c,"ERR busy identity locked by streams\n"); return; }
         if(!model_id_valid(rest) || model_authorize(&db,rest,MODEL_READ|MODEL_WRITE)) { errno=EACCES; error(c); return; }
-        strcpy(c->effective,rest); outf(c,"OK\n"); return;
+        strcpy(c->effective,rest); c->identity_confirmed=1; outf(c,"OK\n"); return;
+    }
+    if(!c->identity_confirmed) {
+        outf(c,"ERR identity-required IDENTITY or explicit AS first\n");
+        if(!strcmp(cmd,"SEND"))c->close_pending=1;
+        return;
     }
     if (!strcmp(cmd, "ROOMS")) {
         if (model_list(&db, c->effective, room_line, c)) error(c);
@@ -175,10 +184,15 @@ static void exec_line(struct pconn *c, char *line)
         else outf(c,"OK\n");
         return;
     }
-    if (!strcmp(cmd, "AVATAR")) {
+    if (!strcmp(cmd,"DETACH")) {
+        if(*rest) { errno=EINVAL; error(c); return; }
+        if(model_detach(&db,c->effective,a))error(c);else outf(c,"OK\n");
+        return;
+    }
+    if (!strcmp(cmd, "AVATAR") || !strcmp(cmd,"MIRROR")) {
         b = word(&rest);
         if (number(a, &off) || off < 1 || off > 899 || !b) { outf(c, "ERR bad-request avatar arguments\n"); return; }
-        if (model_avatar(&db, c->effective, (unsigned)off, b, rest)) error(c);
+        if ((!strcmp(cmd,"MIRROR") ? model_mirror : model_avatar)(&db, c->effective, (unsigned)off, b, rest)) error(c);
         else outf(c, "USER %s %s\n", b, rest);
         return;
     }
@@ -238,7 +252,11 @@ static void exec_line(struct pconn *c, char *line)
     pump(c);
 }
 void proto_on_established(struct pconn *c)
-{ strcpy(c->effective,c->fp); outf(c, "COOLOO 2 %s\n", c->nick[0] ? c->nick : "-"); }
+{
+    if(model_default_identity(&db,c->fp,c->effective)){c->close_pending=1;return;}
+    c->identity_confirmed=!strcmp(c->effective,c->fp);
+    outf(c, "COOLOO 2 %s\n", c->nick[0] ? c->nick : "-");
+}
 void proto_on_plain(struct pconn *c, const uint8_t *pt, size_t len)
 {
     if (len > CONN_IN_CAP - c->in_len) { c->close_pending = 1; return; }

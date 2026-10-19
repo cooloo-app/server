@@ -1,4 +1,4 @@
-# Protocol 2 — v0.2.2
+# Protocol 2 — ordinary avatars and pure mirrors
 
 This release implements public-key IDs, file-based inboxes and simple private
 rooms. Both the Native daemon and SSH gate must be upgraded together. There is
@@ -14,9 +14,11 @@ existing members (maximum 200 distinct members).
 
 ## Message delegation
 
-See [DELEGATION.md](DELEGATION.md) for owner-controlled independent read/write
-grants, explicit AS identity selection, filtered SENT and recovery limitations.
-Existing avatars have no delegated permissions until their owner explicitly grants them.
+See [DELEGATION.md](DELEGATION.md) for parent access to ordinary children, pure
+mirror credentials, identity discovery, detach and filtered SENT limitations.
+Parents default to read/write on ordinary children. Mirrors default to the parent
+message identity and cannot send or receive as themselves. Old child relationships
+and authz must be reset offline; there is no legacy delegation compatibility.
 
 ## Build and verify
 
@@ -38,8 +40,8 @@ current test entry point.
   authenticate independently. `<owner-id>:001` resolves to the child's ID;
   `:000` resolves to the root. Slots 900–999 are reserved.
 - Public rooms have random 64-character IDs and an owner. Every registered
-  identity can read/write public rooms. Only the recipient can read a user
-  inbox, including a child inbox: its parent does not gain read access.
+  identity can read/write public rooms. User inboxes are readable by the recipient
+  and a parent with read access; mirrors use their parent's message identity.
 - Default root: `~/.cooloo/server`; `COOLOO_HOME` overrides it.
 - Files: `rooms/<id>/.meta` and `rooms/<id>/messages.jsonl`. Metadata is atomically
   replaced; message writes use a shared cross-process file lock and fsync.
@@ -58,6 +60,12 @@ HELLO <nickname>
 WHOAMI
 CREATE <nickname>
 AVATAR <slot> <child-public-id> <nickname>
+MIRROR <slot> <child-public-id> <nickname>
+DETACH <child-public-id>
+DELEGATE <child-public-id> read|write|read,write|none # parent's access to child
+IDENTITY                     # actual credential and effective identity
+AS <effective-id>
+SENT <peer-user-id> <scan-offset>
 RENAME <id-or-alias> <nickname>
 ROOMMODE <room-id> public|private
 META <id-or-alias>             # INFO id type owner-or-- slot nickname
@@ -84,7 +92,9 @@ to choose the forced-command ID.
 Gate commands: `register <nickname>`, `whoami`, `rooms`, `create <nickname>`,
 `avatar <slot> <child-id> <nickname>`, `rename <id> <nickname>`, `meta <id>`,
 `send <id> [text...]`, `read <id> <offset>`, `follow <id> <offset>`,
-`join <room-id>`, `room-mode <room-id> public|private`.
+`join <room-id>`, `room-mode <room-id> public|private`, `identity`,
+`mirror <slot> <child-id> <nickname>`, `detach <child-id>`,
+`delegate <child-id> read|write|read,write|none`, `sent <peer-id> <offset>`.
 Use stdin for exact multiline message bytes. Gate tokenizes command arguments
 by whitespace; native registration supports spaces in nicknames.
 Local administration uses `cooloo --as <public-id> <command>`; this entry point

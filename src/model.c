@@ -12,6 +12,8 @@
 #include <dirent.h>
 #include <time.h>
 
+typedef struct { char owner[65]; unsigned slot, mirror, bits; } relation;
+static int relation_load(model *m, const char *child, relation *r);
 static int fail(int e) { errno = e; return -1; }
 int model_id_valid(const char *id)
 {
@@ -121,6 +123,11 @@ int model_meta_json(const model_meta *v, char *json, size_t cap)
         "{\"id\":\"%s\",\"type\":\"%s\",\"nickname\":%s,\"owner\":\"%s\",\"slot\":%u}\n",
         v->id, v->type, nick, v->owner, v->slot);
     if (n < 0 || (size_t)n >= cap) return fail(EOVERFLOW);
+    if (v->mirror) {
+        int k = snprintf(json + n - 2, cap - (size_t)n + 2, ",\"mirror\":1}\n");
+        if (k < 0 || (size_t)k >= cap - (size_t)n + 2) return fail(EOVERFLOW);
+        n = n - 2 + k;
+    }
     if (v->access) {
         int k = snprintf(json + n - 2, cap - (size_t)n + 2, ",\"access\":%u}\n", v->access);
         if (k < 0 || (size_t)k >= cap - (size_t)n + 2) return fail(EOVERFLOW);
@@ -180,11 +187,18 @@ static int load_meta(model *m, const char *id, model_meta *v)
     memcpy(v->owner, q, (size_t)(s - q));
     if (sscanf(s, "\",\"slot\":%u}\n%n", &v->slot, &used) != 1 || !used || s[used]) {
         used = 0;
-        if (sscanf(s, "\",\"slot\":%u,\"access\":%u}\n%n", &v->slot, &v->access, &used) != 2 || !used || s[used] || v->access != 1 || strcmp(v->type,"room")) return fail(EINVAL);
+        if (!strcmp(v->type,"user")) {
+            if (sscanf(s, "\",\"slot\":%u,\"mirror\":%u}\n%n", &v->slot, &v->mirror, &used) != 2 || !used || s[used] || v->mirror != 1) return fail(EINVAL);
+        } else if (sscanf(s, "\",\"slot\":%u,\"access\":%u}\n%n", &v->slot, &v->access, &used) != 2 || !used || s[used] || v->access != 1 || strcmp(v->type,"room")) return fail(EINVAL);
     }
     if (!nickname_valid(v->nickname) ||
         (strcmp(v->type, "user") && strcmp(v->type, "room")) ||
         (v->owner[0] && !model_id_valid(v->owner)) || v->slot > 899) return fail(EINVAL);
+    if (!strcmp(v->type,"user")) {
+        relation r;
+        if(relation_load(m,id,&r))return -1;
+        strcpy(v->owner,r.owner);v->slot=r.slot;v->mirror=r.mirror;
+    }
     return 0;
 }
 static int get(model *m, const char *address, model_meta *out)
@@ -253,10 +267,11 @@ int model_register(model *m, const char *actor, const char *nickname)
     flock(m->lock_fd, LOCK_UN); errno = e;
     return rc;
 }
-int model_avatar(model *m, const char *actor, unsigned slot,
-                 const char *child, const char *nickname)
+static int avatar_create(model *m, const char *actor, unsigned slot,
+                 const char *child, const char *nickname, unsigned mirror)
 {
     model_meta a, v, existing;
+    relation rel;
     char alias[70];
     int rc = -1, e;
     if (!model_id_valid(actor) || !model_id_valid(child) || !nickname_valid(nickname) ||
@@ -270,10 +285,26 @@ int model_avatar(model *m, const char *actor, unsigned slot,
     memset(&v, 0, sizeof v);
     strcpy(v.id, child); strcpy(v.type, "user"); strcpy(v.owner, actor);
     strcpy(v.nickname, nickname); v.slot = slot;
+    v.mirror=mirror;
     rc = create(m, &v);
+    if (!rc) {
+        memset(&rel,0,sizeof rel);strcpy(rel.owner,actor);
+        rel.slot=slot;rel.mirror=mirror;rel.bits=3;
+        rc=relation_save(m,child,&rel);
+        if(rc) {
+            char p[1200]; int saved=errno;
+            if(!path(m,p,sizeof p,child,".meta"))unlink(p);
+            if(!path(m,p,sizeof p,child,""))rmdir(p);
+            errno=saved;
+        }
+    }
 out:
     e = errno; flock(m->lock_fd, LOCK_UN); errno = e; return rc;
 }
+int model_avatar(model *m,const char *actor,unsigned slot,const char *child,const char *nickname)
+{ return avatar_create(m,actor,slot,child,nickname,0); }
+int model_mirror(model *m,const char *actor,unsigned slot,const char *child,const char *nickname)
+{ return avatar_create(m,actor,slot,child,nickname,1); }
 #include "room_access.inc"
 
 int model_room(model *m, const char *actor, const char *nickname, char id[65])
@@ -314,7 +345,13 @@ static int readable(model *m, const char *actor, const char *address, model_meta
 {
     if (authority(m,actor,MODEL_READ) || actor_user(m, actor) || get(m, address, v)) return -1;
     if (!strcmp(v->type,"room")) return room_visible(m,actor,v);
-    return !strcmp(actor, v->id) ? 0 : fail(EACCES);
+    if (!strcmp(actor,v->id)) return 0;
+    {
+        relation r;
+        if(relation_load(m,v->id,&r))return -1;
+        /* A mirror has A's message view, including A's children. */
+        return !strcmp(actor,r.owner) && (r.bits&MODEL_READ) ? 0 : fail(EACCES);
+    }
 }
 int model_can_read(model *m, const char *actor, const char *address)
 {
@@ -336,6 +373,11 @@ int model_send(model *m, const char *actor, const char *address,
     /* Serialize control validation and the journal append across both transports. */
     if (flock(m->lock_fd, LOCK_EX)) return -1;
     if (authority(m,actor,MODEL_WRITE) || actor_user(m, actor) || get(m, address, &v)) goto out;
+    {
+        relation sender,recipient;
+        if(relation_load(m,actor,&sender) || relation_load(m,v.id,&recipient))goto out;
+        if(sender.mirror || recipient.mirror){errno=EACCES;goto out;}
+    }
     if (!strcmp(v.type,"room")) {
         room_access a; char target[65]; int kind, ix;
         kind = room_command(v.id,content,len,target);
@@ -448,7 +490,9 @@ int model_list(model *m, const char *actor, model_visit visit, void *ctx)
     while ((de = readdir(dp))) {
         if (!model_id_valid(de->d_name)) continue;
         if (load_meta(m, de->d_name, &v)) { rc = -1; break; }
-        if (!strcmp(v.type, "room") || !strcmp(actor, v.id)) {
+        relation r;
+        if(relation_load(m,v.id,&r)) { rc=-1; break; }
+        if (!strcmp(v.type, "room") || !strcmp(actor, v.id) || (!strcmp(r.owner,actor) && (r.bits&MODEL_READ))) {
             if (!strcmp(v.type,"room") && room_visible(m,actor,&v)) {
                 if (errno==EACCES) continue;
                 rc=-1; break;

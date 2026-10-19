@@ -11,9 +11,9 @@ import pathlib
 import sys
 root = pathlib.Path(sys.argv[1]) / 'rooms'
 metas = [json.loads(p.read_text()) for p in root.glob('*/.meta')]
-assert len(metas) == 4
+assert len(metas) == 5
 assert all(len(v['id']) == 64 for v in metas)
-assert len({v['id'] for v in metas}) == 4
+assert len({v['id'] for v in metas}) == 5
 child = root / ('c' * 64) / 'messages.jsonl'
 record = json.loads(child.read_text())
 assert record['from'] == 'b' * 64

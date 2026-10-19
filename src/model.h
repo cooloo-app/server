@@ -19,6 +19,7 @@ typedef struct {
     char owner[65];             /* empty for root user */
     unsigned slot;             /* child: 1..899, otherwise 0 */
     unsigned access;           /* room access schema; 0 = legacy public */
+    unsigned mirror;           /* trusted relation overlay, not metadata authority */
 } model_meta;
 
 typedef struct {
@@ -33,6 +34,9 @@ typedef struct {
  * context for trusted local model callers. Effective identity is the actor arg. */
 void model_authenticate(model *m, const char *authenticated);
 int model_authorize(model *m, const char *effective, unsigned permission);
+int model_default_identity(model *m, const char *login, char effective[65]);
+int model_detach(model *m, const char *owner, const char *child);
+int model_mirror(model *m, const char *actor, unsigned slot, const char *child, const char *nickname);
 int model_delegate(model *m, const char *owner, const char *child, unsigned permissions);
 int model_id_valid(const char *id);
 int model_open(model *m, const char *root);
@@ -51,7 +55,8 @@ int model_avatar(model *m, const char *actor, unsigned slot,
 int model_room(model *m, const char *actor, const char *nickname, char id[65]);
 int model_rename(model *m, const char *actor, const char *address,
                  const char *nickname);
-/* Only the recipient reads a user inbox (not its owner, nor its senders).
+/* Recipient and authorized parent may read a user inbox; mirrors use parent
+ * message permissions. Mirror IDs cannot be either endpoint of SEND.
  * Registered identities may read/write public rooms; private rooms require membership. */
 int model_can_read(model *m, const char *actor, const char *address);
 int model_send(model *m, const char *actor, const char *address,
@@ -64,7 +69,7 @@ int model_read(model *m, const char *actor, const char *address,
                off_t *offset, model_emit emit, void *ctx);
 int model_sent(model *m, const char *actor, const char *peer,
                off_t *offset, model_emit emit, void *ctx);
-/* Registered actor sees public rooms and their own inbox, never other inboxes.
+/* Registered actor sees accessible rooms, own inbox and readable child inboxes.
  * Callback nonzero stops enumeration and is returned to caller. */
 typedef int (*model_visit)(void *ctx, const model_meta *meta);
 int model_list(model *m, const char *actor, model_visit visit, void *ctx);

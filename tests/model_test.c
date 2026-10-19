@@ -23,7 +23,7 @@ static int stop(void *ctx, off_t end, const char *line, size_t n)
 static int list(void *ctx, const model_meta *v)
 {
     int *n = ctx;
-    assert(!strcmp(v->type, "room") || !strcmp(v->id, a));
+    assert(!strcmp(v->type, "room") || !strcmp(v->id, a) || !strcmp(v->id,c));
     (*n)++; return 0;
 }
 int main(int argc, char **argv)
@@ -51,7 +51,7 @@ int main(int argc, char **argv)
     snprintf(alias, sizeof alias, "%s:001", a);
     assert(!model_get(&m, alias, &v) && !strcmp(v.id, c));
     assert(!model_send(&m, b, alias, "hello\n\"世界\"\t\\", strlen("hello\n\"世界\"\t\\"), &end));
-    assert(model_can_read(&m, a, alias) < 0 && errno == EACCES);
+    assert(!model_can_read(&m, a, alias));
     assert(model_can_read(&m, b, alias) < 0 && errno == EACCES);
     assert(!model_can_read(&m, c, alias));
     assert(!model_read(&m, c, alias, &off, stop, NULL) && off == 0);
@@ -62,7 +62,7 @@ int main(int argc, char **argv)
     assert(!model_rename(&m, a, c, "renamed"));
     assert(!model_room(&m, a, "public", room));
     assert(!model_can_read(&m, b, room));
-    assert(!model_list(&m, a, list, &n) && n == 2);
+    assert(!model_list(&m, a, list, &n) && n == 3);
     assert(model_send(&m, d, room, "unregistered", 12, &end) < 0);
     assert(model_send(&m, b, room, "\xc0\x80", 2, &end) < 0);
     assert(model_send(&m, b, room, "a\0b", 3, &end) < 0);
@@ -84,30 +84,45 @@ int main(int argc, char **argv)
     snprintf(p, sizeof p, "%s/rooms/%s/messages.jsonl", argv[1], room);
     f = fopen(p, "a"); assert(f); fputs("{incomplete", f); assert(!fclose(f));
     assert(model_send(&m, a, room, "no", 2, &end) < 0 && errno == EIO);
-    /* Authorization checked in the model under the same operation lock. */
+    /* Parent permissions are independent, never child -> parent grants. */
+    model_authenticate(&m,c);
+    assert(model_authorize(&m,a,MODEL_READ)<0);
+    assert(model_delegate(&m,a,c,3)<0);
     model_authenticate(&m,a);
+    assert(!model_authorize(&m,c,MODEL_READ|MODEL_WRITE));
     assert(!model_delegate(&m,a,c,MODEL_READ));
-    model_authenticate(&m,c);
-    assert(!model_authorize(&m,a,MODEL_READ));
-    assert(model_authorize(&m,a,MODEL_WRITE)<0);
-    assert(model_delegate(&m,a,c,3)<0 && errno==EACCES);
-    assert(model_send(&m,a,b,"denied",6,&end)<0 && errno==EACCES);
-    model_authenticate(&m,a);
+    assert(!model_authorize(&m,c,MODEL_READ));
+    assert(model_send(&m,c,b,"denied",6,&end)<0);
     assert(!model_delegate(&m,a,c,MODEL_WRITE));
-    model_authenticate(&m,c);
-    assert(!model_send(&m,a,b,"delegated",9,&end));
-    off=0;
-    assert(model_read(&m,a,a,&off,emit,NULL)<0 && errno==EACCES);
-    model_authenticate(&m,a);
-    assert(!model_delegate(&m,a,c,MODEL_READ|MODEL_WRITE));
-    model_authenticate(&m,c);
-    off=0; count=0;
-    assert(!model_sent(&m,a,b,&off,emit,NULL) && count==1 && off==end);
-    model_authenticate(&m,a);
+    assert(model_can_read(&m,a,c)<0);
+    assert(model_can_read(&m,c,c)<0);
+    assert(!model_send(&m,c,b,"parent as child",15,&end));
+    assert(!model_delegate(&m,a,c,3));
+    off=0;count=0;
+    assert(!model_sent(&m,c,b,&off,emit,NULL) && count==1 && off==end);
     assert(!model_delegate(&m,a,c,0));
-    model_authenticate(&m,c);
-    assert(model_sent(&m,a,b,&off,emit,NULL)<0 && errno==EACCES);
+    assert(model_sent(&m,c,b,&off,emit,NULL)<0);
+    /* Mirror is a credential, not another sending/receiving identity. */
+    assert(!model_mirror(&m,a,2,d,"mirror"));
+    assert(!model_default_identity(&m,d,room) && !strcmp(room,a));
+    assert(!model_get(&m,d,&v) && v.mirror && !strcmp(v.owner,a));
+    assert(model_send(&m,a,d,"no",2,&end)<0);
+    snprintf(alias,sizeof alias,"%s:002",a);
+    assert(model_send(&m,a,alias,"no",2,&end)<0);
+    assert(model_send(&m,d,b,"no",2,&end)<0);
+    model_authenticate(&m,d);
+    assert(!model_send(&m,a,b,"mirror",6,&end));
+    assert(model_send(&m,d,b,"no",2,&end)<0);
+    assert(model_delegate(&m,a,c,3)<0);
+    assert(model_detach(&m,a,d)<0);
+    assert(!model_can_read(&m,a,d));
+    model_authenticate(&m,a);
+    assert(!model_detach(&m,a,d));
+    assert(!model_default_identity(&m,d,room) && !strcmp(room,d));
+    model_authenticate(&m,d);
+    assert(model_authorize(&m,a,MODEL_READ)<0);
+    assert(!model_send(&m,d,b,"independent",11,&end));
     model_close(&m);
-    puts("model: identity, ACL, delegation bits/revocation, filtered sent, JSONL, concurrent append and restart passed");
+    puts("model: identity, ACL, parent permissions, pure mirrors, detach, filtered sent, JSONL, concurrent append and restart passed");
     return 0;
 }

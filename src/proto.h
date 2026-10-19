@@ -42,6 +42,7 @@ struct pconn {
     char     nick[COOLOO_MAX_NICK + 1]; /* "" = unregistered (D25 gate) */
     char     fp[65];                    /* authenticated public key */
     char     effective[65];             /* AS identity, immutable during streams */
+    int      identity_confirmed;        /* mirror clients must acknowledge context */
 
     /* live follows; offset semantics = store byte offsets */
     struct {

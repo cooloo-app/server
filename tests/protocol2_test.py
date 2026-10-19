@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory(prefix='cooloo-proto2-') as tmp:
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
-    keys = ['11' * 32, '22' * 32, '33' * 32]
+    keys = ['11' * 32, '22' * 32, '33' * 32, '44' * 32]
     def call(key, *args):
         return subprocess.check_output([str(root / 'tests/net_client'), str(port), key, *args], text=True, timeout=12).splitlines()
     ids = [call(k, 'PUBLIC')[0] for k in keys]
@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix='cooloo-proto2-') as tmp:
             alias = ids[0] + ':001'
             text = 'hello\n"世界"\\'
             assert call(keys[1], 'SEND', alias, text)[-1].startswith('OK ')
-            assert call(keys[0], 'READ', alias, '0')[-1].startswith('ERR forbidden')
+            assert call(keys[0], 'READ', alias, '0')[-1] == 'END'
             received = call(keys[2], 'READ', ids[2], '0')
             message = json.loads(received[2])
             assert message['content'] == text and message['from'] == ids[1] and message['to'] == ids[2]
@@ -53,8 +53,14 @@ with tempfile.TemporaryDirectory(prefix='cooloo-proto2-') as tmp:
             assert call(keys[0], 'RAWLINE', f'AVATAR 002 {ids[1]} claim')[-1].startswith('ERR exists')
             rooms = call(keys[0], 'ROOMS')
             assert any(line.startswith('ROOM ' + ids[0]) for line in rooms)
-            assert not any(line.startswith('ROOM ' + ids[2]) for line in rooms)
-            print('protocol2: real Noise registration, duplicate nicknames, avatar authentication, private delivery, ACL and incremental read passed')
+            assert any(line.startswith('ROOM ' + ids[2]) for line in rooms)
+            assert call(keys[0], 'RAWLINE', f'MIRROR 002 {ids[3]} mirror')[-1].startswith('USER ')
+            assert call(keys[3], 'RAWLINE', 'IDENTITY')[-1] == f'IDENTITY {ids[3]} {ids[0]}'
+            assert call(keys[3], 'ROOMS')[-1].startswith('ERR identity-required')
+            assert call(keys[1], 'SEND', ids[0]+':002', 'no')[-1].startswith('ERR forbidden')
+            assert call(keys[0], 'RAWLINE', f'DETACH {ids[3]}')[-1]=='OK'
+            assert call(keys[3], 'RAWLINE', 'IDENTITY')[-1] == f'IDENTITY {ids[3]} {ids[3]}'
+            print('protocol2: real Noise, avatars, pure mirror context/alias rejection/detach, private delivery and incremental read passed')
         finally:
             daemon.terminate()
             daemon.wait(timeout=5)
