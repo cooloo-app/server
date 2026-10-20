@@ -224,6 +224,21 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "PING")) {
         send_line("PING\n");
         print_one();
+    } else if (!strcmp(cmd, "READPING") && argc == 5) {
+        char line[8192];
+        int ended = 0, pong = 0;
+        snprintf(line, sizeof line, "READ %s 0\nPING\n", argv[4]);
+        send_line(line);
+        while (!ended || !pong) {
+            next_line(line, sizeof line);
+            puts(line);
+            if (!strcmp(line, "END")) ended = 1;
+            else if (!strcmp(line, "PONG")) pong = 1;
+            else if (!strncmp(line, "MSG ", 4)) {
+                next_line(line, sizeof line); puts(line);
+                if (line[0] != '{') return 1;
+            } else return 1;
+        }
     } else if (!strcmp(cmd, "WHOAMI")) {
         send_line("WHOAMI\n");
         print_one();

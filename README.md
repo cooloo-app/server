@@ -78,7 +78,12 @@ PING
 ```
 
 Messages: `MSG <end-offset> <JSON-byte-length>\n<JSON>\n`. READ ends with END.
-SEND returns `OK <end-offset>`. Errors start with ERR. Use explicit offsets
+SEND returns `OK <end-offset>`. Errors start with ERR. `PING` returns `PONG`;
+long-lived clients should send it every 30 seconds (idle input timeout: 600 seconds).
+A heartbeat can interleave complete records during READ/FOLLOW but never a MSG
+header/body pair. ROOMS is a snapshot, not a change subscription; clients must
+refresh it explicitly. FOLLOW checks for updates on the 100ms daemon tick.
+Use explicit offsets
 for durable catch-up. Private room metadata requires membership; user display
 metadata remains public.
 

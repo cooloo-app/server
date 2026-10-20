@@ -49,6 +49,13 @@ with tempfile.TemporaryDirectory(prefix='cooloo-proto2-') as tmp:
             end = received[1].split()[1]
             assert json.loads(received[2])['content'] == 'public'
             assert call(keys[1], 'READ', room, end)[-1] == 'END'
+            # Heartbeats may interleave records, never a MSG header/body pair.
+            for _ in range(40):
+                call(keys[0], 'SEND', room, 'heartbeat backlog ' + 'x' * 3000)
+            combined = call(keys[1], 'READPING', room)
+            assert combined.count('PONG') == 1 and combined.count('END') == 1
+            assert sum(line.startswith('MSG ') for line in combined) == 41
+            assert call(keys[0], 'PING')[-1] == 'PONG'
             assert call(keys[1], 'READ', room, '1')[-1].startswith('ERR bad-request')
             assert call(keys[0], 'RAWLINE', f'AVATAR 002 {ids[1]} claim')[-1].startswith('ERR exists')
             rooms = call(keys[0], 'ROOMS')
