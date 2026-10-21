@@ -5,3 +5,4 @@
 /tests/model_test
 /coolood
 *.dSYM/
+__pycache__/
