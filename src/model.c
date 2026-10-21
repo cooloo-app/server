@@ -354,6 +354,7 @@ static int readable(model *m, const char *actor, const char *address, model_meta
         return !strcmp(actor,r.owner) && (r.bits&MODEL_READ) ? 0 : fail(EACCES);
     }
 }
+#include "stream_generation.inc"
 int model_can_read(model *m, const char *actor, const char *address)
 {
     model_meta v;

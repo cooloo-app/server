@@ -221,7 +221,28 @@ int main(int argc, char **argv)
 
     print_one();                /* greeting: COOLOO 1 <nick|-> */
 
-    if (!strcmp(cmd, "PING")) {
+    if (!strcmp(cmd,"FILETEST") && argc==5) {
+        char line[9000],expected[100];size_t offset,i;const size_t length=1024*1024;
+        snprintf(line,sizeof line,"FBEGIN self %s 0 %zu\n",argv[4],length);send_line(line);
+        next_line(line,sizeof line);if(strcmp(line,"READY 0"))return 1;
+        for(offset=0;offset<length;offset+=2048){
+            size_t n=(size_t)snprintf(line,sizeof line,"FCHUNK %zu ",offset);
+            for(i=0;i<2048;i++)n+=(size_t)snprintf(line+n,sizeof line-n,"%02x",(unsigned)((offset+i)%256));
+            line[n++]='\n';line[n]=0;send_line(line);next_line(line,sizeof line);
+            snprintf(expected,sizeof expected,"READY %zu",offset+2048);if(strcmp(line,expected))return 1;
+        }
+        send_line("FCOMMIT\n");next_line(line,sizeof line);
+        snprintf(expected,sizeof expected,"FILE %s 1 %zu",argv[4],length);if(strcmp(line,expected))return 1;
+        next_line(line,sizeof line);if(strcmp(line,"END"))return 1;
+        snprintf(line,sizeof line,"FREAD self %s\n",argv[4]);send_line(line);next_line(line,sizeof line);
+        if(strcmp(line,expected))return 1;
+        for(offset=0;offset<length;offset+=2048){size_t pos;int used=0;
+            next_line(line,sizeof line);if(sscanf(line,"DATA %zu %n",&pos,&used)!=1||pos!=offset||strlen(line+used)!=4096)return 1;
+            for(i=0;i<2048;i++)if(hexval(line[used+2*i])*16+hexval(line[used+2*i+1])!=(int)((offset+i)%256))return 1;
+        }
+        next_line(line,sizeof line);if(strcmp(line,"END"))return 1;
+        puts("FILETEST OK");
+    } else if (!strcmp(cmd, "PING")) {
         send_line("PING\n");
         print_one();
     } else if (!strcmp(cmd, "READPING") && argc == 5) {

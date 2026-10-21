@@ -144,6 +144,7 @@ static void conn_close(struct conn *c)
 {
     if (c->used) {
         close(c->p.fd);
+        proto_cleanup(&c->p);
         memset(c, 0, sizeof *c);    /* also wipes key material */
     }
 }

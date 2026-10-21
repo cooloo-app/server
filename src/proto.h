@@ -74,11 +74,18 @@ struct pconn {
         uint8_t buf[SEND_RAW_MAX];
     } sendst;
 
+    /* Dedicated file transfer snapshots/staging, freed on disconnect. */
+    void *file_upload;
+    void *file_output;
+    size_t file_size, file_got;
+    unsigned long long file_base;
+    char file_name[121];
     time_t   last_active;
 };
 
 /* Load <home>/users.conf into memory (daemon start). Missing file = empty. */
 void proto_users_init(void);
+void proto_cleanup(struct pconn *c);
 
 /* nick bound to fingerprint, or "" (daemon calls after Split for greeting) */
 void proto_lookup_nick(const char *fp_hex, char out_nick[COOLOO_MAX_NICK + 1]);

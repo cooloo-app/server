@@ -59,6 +59,7 @@ int model_rename(model *m, const char *actor, const char *address,
  * message permissions. Mirror IDs cannot be either endpoint of SEND.
  * Registered identities may read/write public rooms; private rooms require membership. */
 int model_can_read(model *m, const char *actor, const char *address);
+int model_generation(model *,const char *,const char *,char generation[65]);
 int model_send(model *m, const char *actor, const char *address,
                const char *content, size_t len, off_t *end);
 /* offset must be a record boundary. Return complete original JSONL bytes.

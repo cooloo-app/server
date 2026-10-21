@@ -51,9 +51,23 @@ with tempfile.TemporaryDirectory(prefix='cooloo-proto2-') as tmp:
             assert sum(v.startswith('ERR conflict') for v in raced) == 1
             assert filecmd(keys[0], 'FPUT self ../a 0 61').startswith('ERR bad-request')
             assert filecmd(keys[0], 'FPUT room configs/a 0 61').startswith('ERR bad-request')
+            assert call(keys[0], 'FILETEST', 'scripts/large')[-1] == 'FILETEST OK'
+            assert filecmd(keys[0], 'FDELETE self scripts/large 1') == 'DELETED scripts/large 2'
+            assert filecmd(keys[0], 'FREAD self scripts/large') == 'DELETED scripts/large 2'
+            assert filecmd(keys[0], 'FPUT self scripts/large 0 61').startswith('ERR conflict')
+            assert filecmd(keys[0], 'FPUT self scripts/large 2 61') == 'FILE scripts/large 3 1'
             room_line = call(keys[0], 'RAWLINE', 'CREATE shared')[-1]
             room = room_line.split()[1]
             assert len(room) == 64
+            generation = filecmd(keys[0], 'STREAM '+room)
+            assert generation.startswith('STREAM '+room+' ') and len(generation.split()[2]) == 64
+            assert filecmd(keys[1], 'STREAM '+room) == generation
+            subprocess.check_call(['python3', str(root/'tools/rotate_stream_generations.py'), tmp, '--apply'])
+            assert filecmd(keys[0], 'STREAM '+room) != generation
+            # Different users own independent room-context scripts, regardless of room ownership.
+            private_path = f'rooms/{room}/config/a'
+            assert filecmd(keys[1], f'FPUT self {private_path} 0 61').startswith('FILE ')
+            assert filecmd(keys[0], f'FGET self {private_path}').startswith('ERR not-found')
             assert call(keys[0], 'RAWLINE', f'AVATAR 001 {ids[2]} child')[-1].startswith('USER ')
             alias = ids[0] + ':001'
             text = 'hello\n"世界"\\'

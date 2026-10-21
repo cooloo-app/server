@@ -9,6 +9,7 @@
 #include <errno.h>
 
 static model db;
+static void file_pump(struct pconn *c);
 
 int proto_out(struct pconn *c, const char *line, size_t len)
 {
@@ -86,11 +87,13 @@ static void pump(struct pconn *c)
     }
 }
 void proto_on_writable(struct pconn *c)
-{ if (c->out_len < CONN_OUT_LOWAT) pump(c); }
+{ if (c->out_len < CONN_OUT_LOWAT) {file_pump(c);pump(c);} }
 void proto_tick(struct pconn *c)
 {
     int i;
     if (!c->established || c->close_pending) return;
+    model_authenticate(&db,c->fp);
+    file_pump(c);
     pump(c);
     if (c->xfer.active) return;
     for (i = 0; i < c->nfollows; i++) {
@@ -124,17 +127,9 @@ static char *word(char **rest)
     else *rest = start + strlen(start);
     return start;
 }
-static int file_emit(void *ctx,const char *name,unsigned long long rev,const char *data,size_t len)
-{
-    struct pconn *c=ctx;char line[8500];size_t i,n;
-    static const char hex[]="0123456789abcdef";
-    n=(size_t)snprintf(line,sizeof line,"FILE %s %llu %zu",name,rev,len);
-    if(data){line[n++]=' ';if(!len)line[n++]='-';
-        for(i=0;i<len;i++){unsigned char b=(unsigned char)data[i];line[n++]=hex[b>>4];line[n++]=hex[b&15];}}
-    line[n++]='\n';return proto_out(c,line,n);
-}
 static int unhex(char c)
 { return c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:-1; }
+#include "file_proto.inc"
 static void exec_line(struct pconn *c, char *line)
 {
     char *rest = line, *cmd = word(&rest), *a, *b;
@@ -158,7 +153,7 @@ static void exec_line(struct pconn *c, char *line)
     }
     if (!c->nick[0]) { outf(c, "ERR not-registered HELLO first\n"); return; }
     if (!strcmp(cmd,"AS")) {
-        if(c->xfer.active || c->nfollows) { outf(c,"ERR busy identity locked by streams\n"); return; }
+        if(c->file_upload || c->file_output || c->xfer.active || c->nfollows) { outf(c,"ERR busy identity locked by streams\n"); return; }
         if(!model_id_valid(rest) || model_authorize(&db,rest,MODEL_READ|MODEL_WRITE)) { errno=EACCES; error(c); return; }
         strcpy(c->effective,rest); c->identity_confirmed=1; outf(c,"OK\n"); return;
     }
@@ -167,24 +162,12 @@ static void exec_line(struct pconn *c, char *line)
         if(!strcmp(cmd,"SEND"))c->close_pending=1;
         return;
     }
-    if (!strcmp(cmd,"FLIST") || !strcmp(cmd,"FGET") || !strcmp(cmd,"FPUT")) {
-        int op=!strcmp(cmd,"FLIST")?2:!strcmp(cmd,"FGET")?0:1;
-        char *scope=word(&rest),*name=NULL,data[4096];size_t len=0,i;off_t base=0;
-        if(!scope||strcmp(scope,"self")) {errno=EINVAL;error(c);return;}
-        if(op!=2)name=word(&rest);
-        if(op==1){char *version=word(&rest),*hex=word(&rest);
-            if(number(version,&base)||!hex){errno=EINVAL;error(c);return;}
-            if(strcmp(hex,"-")){
-                size_t n=strlen(hex);if(n%2||n>8192){errno=EINVAL;error(c);return;}
-                len=n/2;for(i=0;i<len;i++){int a=unhex(hex[2*i]),b=unhex(hex[2*i+1]);
-                    if(a<0||b<0){errno=EINVAL;error(c);return;}data[i]=(char)((a<<4)|b);}
-            }
-        }
-        if(*rest||(op!=2&&!name)){errno=EINVAL;error(c);return;}
-        if(model_file(&db,c->effective,op,name,(unsigned long long)base,data,len,file_emit,c))error(c);
-        else outf(c,"END\n");
-        return;
+    if(c->file_output){outf(c,"ERR busy file output active\n");return;}
+    if(!strncmp(cmd,"F",1)&&strcmp(cmd,"FOLLOW")){
+        if(c->nfollows||c->xfer.active){outf(c,"ERR busy message stream active\n");return;}
+        if(file_command(c,cmd,rest))return;
     }
+    if(c->file_upload){outf(c,"ERR busy upload active\n");return;}
     if (!strcmp(cmd, "ROOMS")) {
         if (model_list(&db, c->effective, room_line, c)) error(c);
         else outf(c, "END\n");
@@ -233,6 +216,13 @@ static void exec_line(struct pconn *c, char *line)
     if (model_get(&db, a, &v)) {
         error(c);
         if (!strcmp(cmd, "SEND")) c->close_pending = 1;
+        return;
+    }
+    if (!strcmp(cmd,"STREAM")) {
+        char generation[65];
+        if(*rest){errno=EINVAL;error(c);return;}
+        if(model_generation(&db,c->effective,a,generation))error(c);
+        else outf(c,"STREAM %s %s\n",v.id,generation);
         return;
     }
     if (!strcmp(cmd, "METAFILE")) {

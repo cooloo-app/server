@@ -1,49 +1,111 @@
-# Opaque sync files (Native Protocol 2)
+# User-private sync files and message stream epochs
 
-Server stores bytes, never parses read-state, scripts or configuration. Initial
-scope `self` means the AS/effective identity, including pure mirror credentials.
-Every operation rechecks existing read/write delegation. Files are account-private,
-not shared with room members merely because their path contains a room ID.
+The server stores opaque bytes and revisions, not read-state/config/script logic.
+`self` is the authenticated effective identity (pure mirrors share the parent).
+`rooms/<id>/scripts/**` and `rooms/<id>/config/**` belong to that user, NOT the
+room or its owner. Losing room membership does not revoke access to one's private
+files. `config` is singular; old `configs` paths are not auto-renamed or watched.
+There is no room-member shared client script scope. Future room-owned
+`server-config/server-scripts` require a separate owner-admin deployment runtime;
+that runtime and scope are intentionally not implemented here.
+
+## Native commands
+
+Existing small-file commands remain compatible:
 
 ```
 FLIST self
 FGET self <path>
-FPUT self <path> <base-revision> <lowercase-hex-bytes|->
+FPUT self <path> <base-revision> <lowercase-hex|->
 ```
 
-Success: `FILE <path> <revision> <raw-size>` (PUT/LIST), or
-`FILE <path> <revision> <raw-size> <hex|->` (GET), followed by `END`.
-LIST emits zero or more FILE lines. Errors are a single `ERR` line, without END.
-`-` encodes an empty file. Revision 0 means create-only; existing revisions start
-at 1. Stale PUT returns `ERR conflict` without replacing data. Missing GET returns
-`ERR not-found`. No unconditional overwrite, delete or subscription in this version.
-After timeout/connection loss, GET again: a PUT may already have committed.
+New bounded, stop-and-wait upload and streamed download:
 
-Limits: 4096 raw bytes/file, 128 files/effective identity (512 KiB payload total),
-120 ASCII path bytes; alphanumeric, `.`, `_`, `-`, `/`; no empty, `.` or `..`
-components. The small initial cap deliberately fits the existing line transport;
-this is not yet the proposed 1 MiB transfer protocol. Binary content is supported.
-Native only; SSH gate and public client CLI/script request wrappers are unchanged.
-Use a dedicated connection, not a FOLLOW stream, to associate responses.
+```
+FBEGIN self <path> <base-revision> <raw-size>   -> READY 0
+FCHUNK <offset> <hex>                        -> READY <next-offset>
+FCOMMIT                                     -> FILE ... then END
+FREAD self <path>                            -> FILE ... / DATA ... / END
+FDELETE self <path> <base-revision>           -> DELETED ... then END
+```
 
-Storage: `sync/<effective-id>/<hex-path>` contains decimal revision + LF + opaque
-bytes. A shared registry lock covers authorization/CAS/publication; fsync temporary
-file, rename the entire envelope, fsync directory before acknowledgment. LIST is
-bounded and consistent under the lock. Content and revision cannot tear separately.
-Include `sync/` in offline whole-root backups; never restore message histories and
-sync state independently. No server-side JSON semantics or execution.
+Chunks are 1..2048 raw bytes, ordered and contiguous. Zero-byte upload uses
+FBEGIN size=0 then FCOMMIT. Nothing is published until complete FCOMMIT; disconnect
+frees staging. A connection cannot change AS or use message streams during file
+transfer. Final commit rechecks delegation and CAS. GET/READ output is a consistent
+temporary snapshot pumped with socket backpressure; authorization is rechecked.
 
-Client first application: `rooms/<room-id>/read-state.json`, canonical
-`{"version":1,"read_offset":N}`. Client computes max, persists locally before
-updating unread, and retries conflicts by GET/merge/CAS. Device mute stays in a
-local sidecar. Download offsets are never advanced by shared read watermarks.
-Initial sync polls loaded rooms round-robin, at most one request connection at a
-time; unknown-command falls back to local state until reconnect.
+Records:
 
-Limits: no cross-server replication, room-member scope, automatic scripts/configs
-folder watcher, deletion propagation, or stream-generation protocol. Current
-messages are append-only and room IDs are not reused. Restoring older history or
-reusing a stream ID is NOT supported by offset-only read-state: stop clients and
-plan a coordinated new stream/cache namespace rather than silently retaining old
-watermarks. Concurrent GUI processes sharing the exact same local cache directory
-are not a supported merge boundary; use separate device config directories.
+- `FILE <path> <revision> <raw-size>`: LIST/PUT/FBEGIN+COMMIT or FREAD header.
+- `FILE <path> <revision> <raw-size> <hex|->`: legacy FGET (up to 4096 bytes).
+- `DATA <raw-offset> <hex>`: FREAD data, at most 2048 raw bytes/line.
+- `DELETED <path> <revision>`: persistent tombstone, including in LIST and GET.
+- `END`: successful operation end, except READY acknowledgments.
+- `ERR <code> <detail>`: request failure, no END.
+
+Revision 0 is create-only. Stale writes/deletes return `ERR conflict`; missing GET
+returns `ERR not-found`. Recreating a deleted file requires its tombstone revision.
+After uncertain commit, GET again; do not blindly replay a stale snapshot.
+
+## Limits and persistence
+
+- 1 MiB inclusive per file; old FPUT/FGET retain 4 KiB framing limits.
+- Default 4096 entries (including tombstones) and 64 MiB live bytes per identity.
+- `COOLOO_SYNC_FILES` (1..65536) and `COOLOO_SYNC_BYTES` (1..1073741824) override
+  quotas; invalid values use defaults. Deletions retain entry quota to prevent ABA.
+- Paths: 120 ASCII bytes, alphanumeric plus `._-/`; no empty/dot/dot-dot components.
+- Native only; CLI/script request wrappers and SSH file APIs are not added.
+
+`sync/<effective-id>/<hex-path>` holds `V2 <revision> <deleted:0|1>\n` plus bytes.
+Old revision-only envelopes remain readable and migrate on write. Stable registry
+lock covers authorization, quota accounting, CAS and publication. fsync envelope,
+rename, then fsync directory. Old binaries cannot read V2 envelopes: do not downgrade
+without a reviewed migration. Tombstones are not automatically garbage-collected.
+
+## Client reconciliation
+
+Only private `scripts/` and `config/` under authenticated room cache directories
+are watched. No automatic execution, config activation, or `configs/` migration.
+Each loaded room alternates read-state and folder sync. A completed LIST precedes
+local scanning and remote reads. Exact-byte per-file baselines persist under
+`.cooloo-sync/`; missing baseline never implies local deletion. Modification and
+removal use CAS. Concurrent edits/deletion preserve the local variant under
+`.cooloo-conflicts/` before adopting remote bytes (local deletion gets a note).
+Baselines record the uploaded snapshot, not later edits. Failed or uncertain
+operations are reconciled again on the next cycle. Symlink aliases are rejected;
+scan depth 16 and 8192 entries are client bounds. Filesystem work is synchronous
+and bounded by these caps; large workspace UI performance is not benchmarked.
+One GUI process per local cache directory; use distinct device configurations.
+
+## Message stream generation
+
+`STREAM <room-or-inbox-id>` returns `STREAM <canonical-id> <64-hex-generation>`.
+It checks message read permission. The epoch is persisted in `.generation` under
+the stream directory; normal restarts do not rotate it. The server does not parse
+read watermarks. New clients query before cache loading, archive/reset old message
+cache on epoch change, and bind local JSON v2 to the epoch:
+
+```
+{"version":2,"generation":"<64 hex>","read_offset":123}
+```
+
+Shared state lives at `self/read/<generation>/read-state.json`. Namespacing keeps
+offline clients from overwriting another epoch's read-state. Only matching epochs
+are merged by client max. First migration binds the existing local watermark;
+a changed epoch resets to zero without treating newly downloaded history as read.
+Older servers use local/legacy behavior; older clients do not gain epoch protection.
+
+**Backup restoration is an explicit administrative operation**, not detectable in
+general from offsets (same-size replacement is possible). Stop Native and gate
+writers, restore the approved snapshot, then run:
+
+```
+python3 tools/rotate_stream_generations.py /var/cooloo          # preview
+python3 tools/rotate_stream_generations.py /var/cooloo --apply  # explicit rotation
+```
+
+Do this before reconnecting clients whenever history is replaced/truncated/restored.
+Never rotate during routine deployment. Offline tool uses registry lock, atomic
+replacement and directory fsync; it does not modify messages or private workspaces.
+Independent manual edits of history while clients remain connected are unsupported.
