@@ -32,6 +32,25 @@ with tempfile.TemporaryDirectory(prefix='cooloo-proto2-') as tmp:
                 raise RuntimeError('daemon not ready')
             for k in keys[:2]:
                 assert call(k, 'HELLO', 'same')[-1] == 'NICK same'
+            # Opaque bytes, CAS, isolation and restart-stable envelope.
+            payload = bytes(range(256)) * 16
+            def filecmd(key, command):
+                return call(key, 'RAWLINE', command)[-1]
+            assert filecmd(keys[0], 'FGET self configs/a').startswith('ERR not-found')
+            assert filecmd(keys[0], 'FPUT self configs/a 0 '+payload.hex()) == 'FILE configs/a 1 4096'
+            assert filecmd(keys[0], 'FGET self configs/a') == 'FILE configs/a 1 4096 '+payload.hex()
+            assert filecmd(keys[1], 'FGET self configs/a').startswith('ERR not-found')
+            assert filecmd(keys[0], 'FPUT self configs/a 0 61').startswith('ERR conflict')
+            assert filecmd(keys[0], 'FPUT self configs/a 1 -') == 'FILE configs/a 2 0'
+            assert filecmd(keys[0], 'FGET self configs/a') == 'FILE configs/a 2 0 -'
+            assert filecmd(keys[0], 'FLIST self') == 'FILE configs/a 2 0'
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                raced = list(pool.map(lambda value: filecmd(keys[0], 'FPUT self configs/a 2 '+value), ['61', '62']))
+            assert sum(v == 'FILE configs/a 3 1' for v in raced) == 1
+            assert sum(v.startswith('ERR conflict') for v in raced) == 1
+            assert filecmd(keys[0], 'FPUT self ../a 0 61').startswith('ERR bad-request')
+            assert filecmd(keys[0], 'FPUT room configs/a 0 61').startswith('ERR bad-request')
             room_line = call(keys[0], 'RAWLINE', 'CREATE shared')[-1]
             room = room_line.split()[1]
             assert len(room) == 64

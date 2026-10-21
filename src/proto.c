@@ -30,7 +30,7 @@ static void error(struct pconn *c)
 {
     int e = errno;
     outf(c, "ERR %s %s\n", e == EACCES ? "forbidden" : e == ENOENT ? "not-found" :
-         e == EEXIST ? "exists" : e == EINVAL ? "bad-request" :
+         e == EEXIST ? "exists" : e == ESTALE ? "conflict" : e == EINVAL ? "bad-request" :
          e == EAGAIN ? "rate-limited" : e == EALREADY ? "already-member" :
          e == ENOSPC ? "limit" : "internal", strerror(e));
 }
@@ -124,6 +124,17 @@ static char *word(char **rest)
     else *rest = start + strlen(start);
     return start;
 }
+static int file_emit(void *ctx,const char *name,unsigned long long rev,const char *data,size_t len)
+{
+    struct pconn *c=ctx;char line[8500];size_t i,n;
+    static const char hex[]="0123456789abcdef";
+    n=(size_t)snprintf(line,sizeof line,"FILE %s %llu %zu",name,rev,len);
+    if(data){line[n++]=' ';if(!len)line[n++]='-';
+        for(i=0;i<len;i++){unsigned char b=(unsigned char)data[i];line[n++]=hex[b>>4];line[n++]=hex[b&15];}}
+    line[n++]='\n';return proto_out(c,line,n);
+}
+static int unhex(char c)
+{ return c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:-1; }
 static void exec_line(struct pconn *c, char *line)
 {
     char *rest = line, *cmd = word(&rest), *a, *b;
@@ -154,6 +165,24 @@ static void exec_line(struct pconn *c, char *line)
     if(!c->identity_confirmed) {
         outf(c,"ERR identity-required IDENTITY or explicit AS first\n");
         if(!strcmp(cmd,"SEND"))c->close_pending=1;
+        return;
+    }
+    if (!strcmp(cmd,"FLIST") || !strcmp(cmd,"FGET") || !strcmp(cmd,"FPUT")) {
+        int op=!strcmp(cmd,"FLIST")?2:!strcmp(cmd,"FGET")?0:1;
+        char *scope=word(&rest),*name=NULL,data[4096];size_t len=0,i;off_t base=0;
+        if(!scope||strcmp(scope,"self")) {errno=EINVAL;error(c);return;}
+        if(op!=2)name=word(&rest);
+        if(op==1){char *version=word(&rest),*hex=word(&rest);
+            if(number(version,&base)||!hex){errno=EINVAL;error(c);return;}
+            if(strcmp(hex,"-")){
+                size_t n=strlen(hex);if(n%2||n>8192){errno=EINVAL;error(c);return;}
+                len=n/2;for(i=0;i<len;i++){int a=unhex(hex[2*i]),b=unhex(hex[2*i+1]);
+                    if(a<0||b<0){errno=EINVAL;error(c);return;}data[i]=(char)((a<<4)|b);}
+            }
+        }
+        if(*rest||(op!=2&&!name)){errno=EINVAL;error(c);return;}
+        if(model_file(&db,c->effective,op,name,(unsigned long long)base,data,len,file_emit,c))error(c);
+        else outf(c,"END\n");
         return;
     }
     if (!strcmp(cmd, "ROOMS")) {
@@ -276,9 +305,9 @@ void proto_on_plain(struct pconn *c, const uint8_t *pt, size_t len)
         } else {
             char *nl = memchr(c->in, '\n', c->in_len);
             size_t n;
-            if (!nl) { if (c->in_len > 1024) c->close_pending = 1; return; }
+            if (!nl) { if (c->in_len > 9000) c->close_pending = 1; return; }
             n = (size_t)(nl - (char *)c->in);
-            if (n > 1024 || memchr(c->in, 0, n) || memchr(c->in, '\r', n)) { c->close_pending = 1; return; }
+            if (n > 9000 || memchr(c->in, 0, n) || memchr(c->in, '\r', n)) { c->close_pending = 1; return; }
             c->in[n] = 0; exec_line(c, (char *)c->in);
             memmove(c->in, nl + 1, c->in_len - n - 1); c->in_len -= n + 1;
         }

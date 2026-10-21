@@ -245,6 +245,7 @@ static int actor_user(model *m, const char *actor)
     return !strcmp(a.type, "user") ? 0 : fail(EACCES);
 }
 #include "delegation.inc"
+#include "sync_files.inc"
 
 static int create(model *m, const model_meta *v)
 {

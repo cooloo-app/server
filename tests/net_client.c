@@ -140,7 +140,7 @@ static void print_until(const char *terminator)
 
 static void print_one(void)
 {
-    char line[8192];
+    char line[10000];
     next_line(line, sizeof line);
     printf("%s\n", line);
 }
@@ -287,7 +287,7 @@ int main(int argc, char **argv)
             }
         }
     } else if (!strcmp(cmd, "RAWLINE") && argc == 5) {
-        char line[8192];
+        char line[10000];
         snprintf(line, sizeof line, "%s\n", argv[4]);
         send_line(line);
         print_one();

@@ -73,4 +73,8 @@ int model_sent(model *m, const char *actor, const char *peer,
  * Callback nonzero stops enumeration and is returned to caller. */
 typedef int (*model_visit)(void *ctx, const model_meta *meta);
 int model_list(model *m, const char *actor, model_visit visit, void *ctx);
+/* Native opaque file API: GET=0, PUT=1, LIST=2; ESTALE means CAS conflict. */
+typedef int (*model_file_emit)(void *, const char *, unsigned long long, const char *, size_t);
+int model_file(model *, const char *, int, const char *, unsigned long long,
+               const char *, size_t, model_file_emit, void *);
 #endif

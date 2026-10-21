@@ -87,6 +87,12 @@ Use explicit offsets
 for durable catch-up. Private room metadata requires membership; user display
 metadata remains public.
 
+## Opaque sync files
+
+Native `FLIST/FGET/FPUT self` provide versioned, atomic, account-private files.
+See [sync file contract](SYNC_FILES.md) for framing, limits, CAS, persistence and
+client-owned read-state semantics. Server does not interpret file contents.
+
 ## SSH gate
 
 Administrator binds an SSH key to an existing public ID with a restricted forced
