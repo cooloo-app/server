@@ -50,6 +50,7 @@ nettest: coolood cooloo tests/net_client
 test: cooloo coolood vectors nettest modeltest
 	python3 tests/private_room_test.py
 	python3 tests/reset_relations_test.py
+	python3 tests/message_id_test.py
 
 install: cooloo coolood
 	install -m 0755 cooloo $(PREFIX)/bin/cooloo

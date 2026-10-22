@@ -71,6 +71,7 @@ struct pconn {
         char   room[COOLOO_MAX_ROOM + 1];
         size_t len;
         size_t got;
+        char uuid[33];
         uint8_t buf[SEND_RAW_MAX];
     } sendst;
 

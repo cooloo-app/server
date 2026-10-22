@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix='cooloo-proto2-') as tmp:
             assert call(keys[1], 'READ', room, end)[-1] == 'END'
             # Heartbeats may interleave records, never a MSG header/body pair.
             for _ in range(40):
-                call(keys[0], 'SEND', room, 'heartbeat backlog ' + 'x' * 3000)
+                call(keys[0], 'SEND', room, f'heartbeat backlog {_} ' + 'x' * 3000)
             combined = call(keys[1], 'READPING', room)
             assert combined.count('PONG') == 1 and combined.count('END') == 1
             assert sum(line.startswith('MSG ') for line in combined) == 41

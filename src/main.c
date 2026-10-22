@@ -113,19 +113,21 @@ int main(int argc, char **argv)
     else if (!strcmp(cmd, "meta") && n == 2) {
         rc = model_get_visible(&db, actor, args[1], &meta);
         if (!rc) printf("INFO %s %s %s %03u %s\n", meta.id, meta.type, meta.owner[0] ? meta.owner : "-", meta.slot, meta.nickname);
-    } else if (!strcmp(cmd, "send") && n >= 2) {
-        if (n == 2) len = fread(buf, 1, sizeof buf, stdin);
+    } else if (!strcmp(cmd, "send") && n >= 3) {
+        long long ts;
+        if(!model_uuid_valid(args[2])) {errno=EINVAL;goto done;}
+        if (n == 3) len = fread(buf, 1, sizeof buf, stdin);
         else {
-            for (i = 2; i < n; i++) {
+            for (i = 3; i < n; i++) {
                 size_t k = strlen(args[i]);
-                if (len + k + (i > 2) > MODEL_CONTENT_MAX) { len = sizeof buf; break; }
-                if (i > 2) buf[len++] = ' ';
+                if (len + k + (i > 3) > MODEL_CONTENT_MAX) { len = sizeof buf; break; }
+                if (i > 3) buf[len++] = ' ';
                 memcpy(buf + len, args[i], k); len += k;
             }
         }
         if (ferror(stdin) || len > MODEL_CONTENT_MAX) errno = EINVAL;
-        else rc = model_send(&db, actor, args[1], buf, len, &end);
-        if (!rc) printf("OK %lld\n", (long long)end);
+        else rc = model_send_id(&db,actor,args[1],args[2],buf,len,&end,&ts);
+        if (!rc) printf("OK %lld %s %lld\n",(long long)end,args[2],ts);
     } else if ((!strcmp(cmd, "read") || !strcmp(cmd, "follow")) && n == 3) {
         if (number(args[2], &end)) errno = EINVAL;
         else {
@@ -137,7 +139,8 @@ int main(int argc, char **argv)
             if (!rc && !strcmp(cmd, "read")) puts("END");
         }
     } else errno = EINVAL;
-    if (rc) fprintf(stderr, "ERR %s\n", strerror(errno));
+done:
+    if (rc) fprintf(stderr,"ERR %s %s\n",errno==EEXIST?"id-conflict":errno==EALREADY?"duplicate-content":errno==EACCES?"forbidden":"request-failed",strerror(errno));
     model_close(&db);
     return rc ? 1 : 0;
 }

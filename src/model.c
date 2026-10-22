@@ -363,15 +363,23 @@ int model_can_read(model *m, const char *actor, const char *address)
     rc = readable(m, actor, address, &v); e = errno;
     flock(m->lock_fd, LOCK_UN); errno = e; return rc;
 }
+#include "message_id.inc"
 int model_send(model *m, const char *actor, const char *address,
                const char *content, size_t len, off_t *end)
+{
+    char uuid[33];long long ts;
+    if(model_uuid(uuid))return -1;
+    return model_send_id(m,actor,address,uuid,content,len,end,&ts);
+}
+int model_send_id(model *m, const char *actor, const char *address,const char *uuid,
+               const char *content, size_t len, off_t *end,long long *stamp)
 {
     model_meta v;
     char p[1200], text[MODEL_CONTENT_MAX * 6 + 3], json[MODEL_JSON_MAX], tail;
     int fd = -1, rc = -1, n, e;
     off_t start;
     long long now = (long long)time(NULL);
-    if (!content || !len || len > MODEL_CONTENT_MAX || !utf8(content, len)) return fail(EINVAL);
+    if (!model_uuid_valid(uuid) || !end || !stamp || !content || !len || len > MODEL_CONTENT_MAX || !utf8(content, len)) return fail(EINVAL);
     /* Serialize control validation and the journal append across both transports. */
     if (flock(m->lock_fd, LOCK_EX)) return -1;
     if (authority(m,actor,MODEL_WRITE) || actor_user(m, actor) || get(m, address, &v)) goto out;
@@ -380,6 +388,17 @@ int model_send(model *m, const char *actor, const char *address,
         if(relation_load(m,actor,&sender) || relation_load(m,v.id,&recipient))goto out;
         if(sender.mirror || recipient.mirror){errno=EACCES;goto out;}
     }
+    /* Check current visibility before looking up IDs. Join requests retain their
+     * special admission path; all other private-room sends require membership. */
+    if(!strcmp(v.type,"room")) {
+        char target[65];int kind=room_command(v.id,content,len,target);
+        if(kind<0 || (kind!=1 && room_visible(m,actor,&v)))goto out;
+    }
+    now=(long long)time(NULL);
+    quote(text,content,len);
+    n=message_lookup(m,uuid,actor,v.id,text,now,end,stamp);
+    if(n<0)goto out;
+    if(n==1){rc=0;goto out;}
     if (!strcmp(v.type,"room")) {
         room_access a; char target[65]; int kind, ix;
         kind = room_command(v.id,content,len,target);
@@ -395,10 +414,7 @@ int model_send(model *m, const char *actor, const char *address,
             if (member_index(&a,actor)<0) { errno=EACCES; goto out; }
             ix=request_index(&a,target);
             if (member_index(&a,target)>=0) {
-                struct stat st;
-                if (path(m,p,sizeof p,v.id,"messages.jsonl")) goto out;
-                if (stat(p,&st)) goto out;
-                *end=st.st_size; rc=0; goto out;
+                errno=EALREADY;goto out;
             }
             if (ix<0 || !a.pending[ix].pending) { errno=ENOENT; goto out; }
             if (a.count==ROOM_MEMBERS) { errno=ENOSPC; goto out; }
@@ -412,15 +428,15 @@ int model_send(model *m, const char *actor, const char *address,
     /* Do not append to crash debris: operator must repair the damaged tail. */
     if (start && (pread(fd, &tail, 1, start - 1) != 1 || tail != '\n')) { errno = EIO; goto out; }
     quote(text, content, len);
-    n = snprintf(json, sizeof json, "{\"ts\":%lld,\"from\":\"%s\",\"to\":\"%s\",\"content\":%s}\n",
-                 now, actor, v.id, text);
+    n = snprintf(json, sizeof json, "{\"ts\":%lld,\"from\":\"%s\",\"to\":\"%s\",\"content\":%s,\"id\":\"%s\"}\n",
+                 now, actor, v.id, text,uuid);
     if (n <= 0 || (size_t)n >= sizeof json) { errno = EOVERFLOW; goto out; }
     if (allwrite(fd, json, (size_t)n) || fsync(fd)) {
         e = errno;
-        if (ftruncate(fd, start)) e = EIO;
+        if (ftruncate(fd, start) || fsync(fd)) e = EIO;
         errno = e; goto out;
     }
-    *end = start + n; rc = 0;
+    *end = start + n; *stamp=now; rc = 0;
 out:
     e = errno;
     if (fd >= 0) close(fd);

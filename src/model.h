@@ -60,6 +60,9 @@ int model_rename(model *m, const char *actor, const char *address,
  * Registered identities may read/write public rooms; private rooms require membership. */
 int model_can_read(model *m, const char *actor, const char *address);
 int model_generation(model *,const char *,const char *,char generation[65]);
+int model_uuid_valid(const char *id);
+int model_uuid(char out[33]);
+int model_send_id(model *,const char *,const char *,const char *,const char *,size_t,off_t *,long long *);
 int model_send(model *m, const char *actor, const char *address,
                const char *content, size_t len, off_t *end);
 /* offset must be a record boundary. Return complete original JSONL bytes.

@@ -269,9 +269,13 @@ int main(int argc, char **argv)
         send_line(line);
         print_one();
     } else if (!strcmp(cmd, "SEND") && argc == 6) {
-        char hdr[128];
-        size_t hl = (size_t)snprintf(hdr, sizeof hdr, "SEND %s %zu\n",
-                                     argv[4], strlen(argv[5]));
+        char hdr[160],uuid[33];unsigned char bytes[16];size_t i;
+        FILE *random=fopen("/dev/urandom","rb");
+        if(!random || fread(bytes,1,16,random)!=16)return 1;
+        fclose(random);bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
+        for(i=0;i<16;i++)snprintf(uuid+i*2,3,"%02x",bytes[i]);
+        size_t hl = (size_t)snprintf(hdr, sizeof hdr, "SEND %s %s %zu\n",
+                                     argv[4],uuid, strlen(argv[5]));
         send_pt((const uint8_t *)hdr, hl);
         send_pt((const uint8_t *)argv[5], strlen(argv[5]));
         print_one();

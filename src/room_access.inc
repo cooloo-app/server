@@ -93,7 +93,7 @@ static int journal_replay(model *m, const model_meta *v, room_access *a)
             if(*s=='\\') { if(!strncmp(s,"\\u0009",6)) { text[w++]='\t'; s+=6; } else break; }
             else text[w++]=*s++;
         }
-        if(strcmp(s,"\"}\n")) continue;
+        if(strncmp(s,"\",\"id\":\"",8) || strlen(s)!=43) continue;
         text[w]=0; kind=room_command(v->id,text,w,target);
         if(kind==2) { if(member_add(a,target)) goto out; ix=request_index(a,target); if(ix>=0) a->pending[ix].pending=0; }
         if(kind==1 && ts>=now-REQUEST_TTL) {

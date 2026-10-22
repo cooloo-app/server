@@ -71,10 +71,10 @@ int main(int argc, char **argv)
     if (!pid) {
         model child;
         assert(!model_open(&child, argv[1]));
-        for (i = 0; i < 40; i++) assert(!model_send(&child, b, room, "child", 5, &end));
+        for (i = 0; i < 40; i++) {char text[32];int n=snprintf(text,sizeof text,"child %d",i);assert(!model_send(&child,b,room,text,(size_t)n,&end));}
         model_close(&child); _exit(0);
     }
-    for (i = 0; i < 40; i++) assert(!model_send(&m, a, room, "parent", 6, &end));
+    for (i = 0; i < 40; i++) {char text[32];int n=snprintf(text,sizeof text,"parent %d",i);assert(!model_send(&m,a,room,text,(size_t)n,&end));}
     assert(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && !WEXITSTATUS(status));
     off = 0; count = 0;
     assert(!model_read(&m, b, room, &off, emit, NULL) && count == 80);
@@ -84,6 +84,8 @@ int main(int argc, char **argv)
     snprintf(p, sizeof p, "%s/rooms/%s/messages.jsonl", argv[1], room);
     f = fopen(p, "a"); assert(f); fputs("{incomplete", f); assert(!fclose(f));
     assert(model_send(&m, a, room, "no", 2, &end) < 0 && errno == EIO);
+    /* Global UUID scan fails closed until the deliberately damaged stream is repaired. */
+    assert(!truncate(p,off));
     /* Parent permissions are independent, never child -> parent grants. */
     model_authenticate(&m,c);
     assert(model_authorize(&m,a,MODEL_READ)<0);

@@ -1,5 +1,6 @@
 """Disposable gate/model tests: persisted room controls, limits and legacy activation."""
 import json
+import uuid
 import os
 from pathlib import Path
 import subprocess
@@ -13,6 +14,7 @@ with tempfile.TemporaryDirectory(prefix='cooloo-private-') as tmp:
     def uid(n):
         return f'{n:064x}'
     def call(actor, *args, text=None, ok=True):
+        if args[0]=='send': args=(*args[:2],uuid.uuid4().hex,*args[2:])
         p = subprocess.run([str(root / 'cooloo'), '--as', actor, *args],
                            env=env, input=text, text=True, capture_output=True, timeout=10)
         assert (p.returncode == 0) == ok, (args, p.returncode, p.stdout, p.stderr)
@@ -54,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix='cooloo-private-') as tmp:
     call(c, 'join', room)
     call(b, 'send', room, text=f'@{room}  join-approve {c}')
     approved = log.read_bytes()
-    call(b, 'send', room, text=f'@{room} join-approve {c}')
+    call(b, 'send', room, text=f'@{room} join-approve {c}', ok=False)
     assert log.read_bytes() == approved  # idempotent approval
     call(c, 'read', room, '0')
     call(c, 'meta', room)
@@ -103,7 +105,7 @@ with tempfile.TemporaryDirectory(prefix='cooloo-private-') as tmp:
     (directory / '.meta').write_text(json.dumps(meta, separators=(',', ':')) + '\n')
     (directory / '.access').unlink()
     (directory / 'messages.jsonl').write_text(json.dumps(dict(ts=1, **{'from': a, 'to': legacy},
-        content=f'@{legacy} join-approve {e}'), separators=(',', ':')) + '\n')
+        content=f'@{legacy} join-approve {e}', id=uuid.uuid4().hex), separators=(',', ':')) + '\n')
     call(b, 'join', legacy)
     call(e, 'send', legacy, text=f'@{legacy} join-approve {b}', ok=False)
     call(a, 'send', legacy, text=f'@{legacy} join-approve {b}')
@@ -118,7 +120,7 @@ with tempfile.TemporaryDirectory(prefix='cooloo-private-') as tmp:
         call(uid(i), 'register', 'candidate')
         call(uid(i), 'join', full)
     def approve(i):
-        return subprocess.run([str(root / 'cooloo'), '--as', b, 'send', full,
+        return subprocess.run([str(root / 'cooloo'), '--as', b, 'send', full, uuid.uuid4().hex,
             f'@{full} join-approve {uid(i)}'], env=env, capture_output=True).returncode
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert sorted(pool.map(approve, (200, 201))) == [0, 1]

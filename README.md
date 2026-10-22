@@ -1,8 +1,9 @@
-# Protocol 2 — ordinary avatars and pure mirrors
+# Protocol 3 — stable message UUIDs and idempotent sends
 
-This release implements public-key IDs, file-based inboxes and simple private
-rooms. Both the Native daemon and SSH gate must be upgraded together. There is
-no protocol-1 compatibility shim or legacy-history migration.
+This release adds UUIDv4 message identity and D1 content deduplication to public-key
+IDs, file-based inboxes and private rooms. Upgrade Native, gate and clients together.
+See [message identity and offline migration](MESSAGE_IDS.md); Protocol 2 clients are
+not supported. The existing Noise cryptographic prologue remains unchanged.
 
 ## Simple private rooms
 
@@ -45,7 +46,7 @@ current test entry point.
 - Default root: `~/.cooloo/server`; `COOLOO_HOME` overrides it.
 - Files: `rooms/<id>/.meta` and `rooms/<id>/messages.jsonl`. Metadata is atomically
   replaced; message writes use a shared cross-process file lock and fsync.
-- JSONL fields: `ts`, `from`, `to`, `content`. Timestamp is server-assigned;
+- Canonical JSONL fields, in order: `ts`, `from`, `to`, `content`, `id`. Timestamp is server-assigned;
   sender is authenticated. Content is 1–4096 UTF-8 bytes, NUL excluded.
 - Offset is the server JSONL byte boundary. Corrupt/incomplete server tails
   fail closed; they are not silently skipped or overwritten.
@@ -53,7 +54,7 @@ current test entry point.
 
 ## Native commands
 
-Noise prologue `cooloo-v2`; greeting `COOLOO 2 <nickname|->`.
+Noise prologue `cooloo-v2`; greeting `COOLOO 3 <nickname|->` (old clients reject it).
 
 ```
 HELLO <nickname>
@@ -71,14 +72,14 @@ ROOMMODE <room-id> public|private
 META <id-or-alias>             # INFO id type owner-or-- slot nickname
 METAFILE <id-or-alias>         # META <canonical JSON metadata>
 ROOMS                        # accessible rooms + own inbox, then END
-SEND <id-or-alias> <length>\n<raw payload>
+SEND <id-or-alias> <message-uuid> <length>\n<raw payload>
 READ <id-or-alias> <offset>   # from boundary; no legacy -N
 FOLLOW <id-or-alias> [offset] # omitted offset = current tail
 PING
 ```
 
 Messages: `MSG <end-offset> <JSON-byte-length>\n<JSON>\n`. READ ends with END.
-SEND returns `OK <end-offset>`. Errors start with ERR. `PING` returns `PONG`;
+SEND returns `OK <end-offset> <message-uuid> <original-ts>`. Errors start with ERR. `PING` returns `PONG`;
 long-lived clients should send it every 30 seconds (idle input timeout: 600 seconds).
 A heartbeat can interleave complete records during READ/FOLLOW but never a MSG
 header/body pair. ROOMS is a snapshot, not a change subscription; clients must
@@ -102,7 +103,7 @@ to choose the forced-command ID.
 
 Gate commands: `register <nickname>`, `whoami`, `rooms`, `create <nickname>`,
 `avatar <slot> <child-id> <nickname>`, `rename <id> <nickname>`, `meta <id>`,
-`send <id> [text...]`, `read <id> <offset>`, `follow <id> <offset>`,
+`send <id> <message-uuid> [text...]`, `read <id> <offset>`, `follow <id> <offset>`,
 `join <room-id>`, `room-mode <room-id> public|private`, `identity`,
 `mirror <slot> <child-id> <nickname>`, `detach <child-id>`,
 `delegate <child-id> read|write|read,write|none`, `sent <peer-id> <offset>`.

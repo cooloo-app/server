@@ -239,12 +239,15 @@ static void exec_line(struct pconn *c, char *line)
              v.owner[0] ? v.owner : "-", v.slot, v.nickname); return;
     }
     if (!strcmp(cmd, "SEND")) {
-        if (number(rest, &off) || !off || off > MODEL_CONTENT_MAX) {
+        char *length=strchr(rest,' ');
+        if(length)*length++=0;
+        if (!length || !model_uuid_valid(rest) || number(length, &off) || !off || off > MODEL_CONTENT_MAX) {
             outf(c, "ERR bad-request SEND length 1..4096\n");
             /* Unknown/invalid payload length cannot be safely resynchronized. */
             c->close_pending = 1; return;
         }
         c->sendst.active = 1; c->sendst.len = (size_t)off; c->sendst.got = 0;
+        strcpy(c->sendst.uuid,rest);
         strcpy(c->sendst.room, v.id); return;
     }
     if (strcmp(cmd, "READ") && strcmp(cmd, "FOLLOW") && strcmp(cmd,"SENT")) {
@@ -274,7 +277,7 @@ void proto_on_established(struct pconn *c)
 {
     if(model_default_identity(&db,c->fp,c->effective)){c->close_pending=1;return;}
     c->identity_confirmed=!strcmp(c->effective,c->fp);
-    outf(c, "COOLOO 2 %s\n", c->nick[0] ? c->nick : "-");
+    outf(c, "COOLOO 3 %s\n", c->nick[0] ? c->nick : "-");
 }
 void proto_on_plain(struct pconn *c, const uint8_t *pt, size_t len)
 {
@@ -283,15 +286,18 @@ void proto_on_plain(struct pconn *c, const uint8_t *pt, size_t len)
     for (;;) {
         if (c->sendst.active) {
             size_t n = c->sendst.len - c->sendst.got;
-            off_t end;
+            off_t end;long long ts;
             if (n > c->in_len) n = c->in_len;
             memcpy(c->sendst.buf + c->sendst.got, c->in, n);
             c->sendst.got += n; memmove(c->in, c->in + n, c->in_len - n); c->in_len -= n;
             if (c->sendst.got < c->sendst.len) return;
             c->sendst.active = 0;
             model_authenticate(&db,c->fp);
-            if (model_send(&db, c->effective, c->sendst.room, (char *)c->sendst.buf, c->sendst.len, &end)) error(c);
-            else outf(c, "OK %lld\n", (long long)end);
+            if (model_send_id(&db,c->effective,c->sendst.room,c->sendst.uuid,(char *)c->sendst.buf,c->sendst.len,&end,&ts)) {
+                if(errno==EEXIST)outf(c,"ERR id-conflict message ID conflict\n");
+                else if(errno==EALREADY)outf(c,"ERR duplicate-content duplicate or already applied control\n");
+                else error(c);
+            } else outf(c,"OK %lld %s %lld\n",(long long)end,c->sendst.uuid,ts);
         } else {
             char *nl = memchr(c->in, '\n', c->in_len);
             size_t n;
